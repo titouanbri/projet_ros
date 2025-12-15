@@ -1,0 +1,26 @@
+{
+    "python.autoComplete.extraPaths": [
+        "/home/titouan/ros2_ws/build/ur3_traj",
+        "/home/titouan/ros2_ws/install/ur3_traj/lib/python3.10/site-packages",
+        "/home/titouan/ros2_ws/build/tp_zoo",
+        "/home/titouan/ros2_ws/install/tp_zoo/lib/python3.10/site-packages",
+        "/home/titouan/ros2_ws/build/projet_ros",
+        "/home/titouan/ros2_ws/install/projet_ros/lib/python3.10/site-packages",
+        "/home/titouan/ros2_ws/build/my_robot_test",
+        "/home/titouan/ros2_ws/install/my_robot_test/lib/python3.10/site-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/titouan/ros2_ws/build/ur3_traj",
+        "/home/titouan/ros2_ws/install/ur3_traj/lib/python3.10/site-packages",
+        "/home/titouan/ros2_ws/build/tp_zoo",
+        "/home/titouan/ros2_ws/install/tp_zoo/lib/python3.10/site-packages",
+        "/home/titouan/ros2_ws/build/projet_ros",
+        "/home/titouan/ros2_ws/install/projet_ros/lib/python3.10/site-packages",
+        "/home/titouan/ros2_ws/build/my_robot_test",
+        "/home/titouan/ros2_ws/install/my_robot_test/lib/python3.10/site-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ]
+}
