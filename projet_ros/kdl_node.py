@@ -87,7 +87,7 @@ class CartesianToJointVelocity(Node):
             '/forward_velocity_controller/commands', # Topic standard ros2_control
             10
         )
-
+erery
 
     def robot_description_callback(self, msg):
         """Ce callback n'est appelé qu'une fois, quand on reçoit l'URDF"""
