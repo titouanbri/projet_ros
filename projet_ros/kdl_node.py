@@ -2,7 +2,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from std_msgs.msg import String 
-# zob
+
 # Messages
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import JointState
