@@ -85,7 +85,7 @@ class CartesianToJointVelocity(Node):
 
         self.create_subscription(
             Twist,
-            '/cmd_vel_input',
+            '/cmd_vel_input', # Topic d'entrée
             self.cmd_vel_callback,
             10
         )
