@@ -32,6 +32,12 @@ setup(
             'position_base_control = projet_ros.position_base_control:main',
             'phone_detector = projet_ros.phone_detector:main',
             'kdl_node = projet_ros.kdl_node:main',
+            'video_feed_gui = projet_ros.video_feed:main',
+            'webcam_publisher = projet_ros.webcam_publisher:main',
+            'aruko_detection = projet_ros.aruko_detection:main',
+            'cart_vel_panel = projet_ros.cart_vel_panel:main',
+            'ivk = projet_ros.ivk:main',
+
         ],
     },
 )

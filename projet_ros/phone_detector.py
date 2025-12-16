@@ -26,7 +26,7 @@ class YoloSmartphoneNode(Node):
         self.br = CvBridge()
         self.subscription = self.create_subscription(
             Image,
-            '/camera/camera/color/image_raw', #/webcam/image/raw
+            '/image_raw', #/webcam/image/raw
             self.image_callback,
             10
         )
