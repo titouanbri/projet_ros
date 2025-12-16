@@ -16,15 +16,15 @@ class YoloSmartphoneNode(Node):
     def __init__(self):
         super().__init__('yolo_smartphone_node')
 
-        self.get_logger().info("Initialisation YOLOv8 pour détection de smartphones...")
+        self.get_logger().info("Initialisation YOLO pour détection de smartphones...")
         
-        self.model = YOLO("yolov8n-seg.pt")  
+        self.model = YOLO("models/yolo11s.pt")  
         
         # Ros config
         self.br = CvBridge()
 
         # Subscriber
-        self.subscription = self.create_subscription(Image, '/image_raw', self.image_callback, 10)
+        self.subscription = self.create_subscription(Image, '/webcam/image/raw', self.image_callback, 10)
         
         # Publisher Image (Visualisation)
         self.publisher_ = self.create_publisher(Image, '/yolo/smartphone_result', 10)
@@ -79,7 +79,7 @@ class YoloSmartphoneNode(Node):
                 
                 # Optionnel : Dessiner un point rouge au centre sur l'image de retour
                 cv2.circle(res_image, (int(center_x), int(center_y)), 5, (0, 0, 255), -1)
-                self.get_logger().info(f"Smartphone détecté au centre: x={center_x:.1f}, y={center_y:.1f}")
+                #self.get_logger().info(f"Smartphone détecté au centre: x={center_x:.1f}, y={center_y:.1f}")
 
         # Conversion OpenCV -> ROS Image et Publication Visualisation
         out_msg = self.br.cv2_to_imgmsg(res_image, "bgr8")
