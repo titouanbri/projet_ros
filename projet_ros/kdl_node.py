@@ -1,5 +1,6 @@
 import sys
 import rclpy
+import time
 from rclpy.node import Node
 from std_msgs.msg import String, Float64MultiArray
 from geometry_msgs.msg import Twist
@@ -43,7 +44,7 @@ class CartesianToJointVelocity(Node):
     def __init__(self):
         super().__init__('ur3_vel_ik_node')
 
-        # Liste de tentatives pour la base si la première échoue
+        # Configuration
         self.possible_base_links = ['base_link_inertia', 'base_link', 'base', 'world']
         self.end_effector_link = 'tool0' 
         
@@ -51,18 +52,21 @@ class CartesianToJointVelocity(Node):
         self.kdl_chain = None
         self.ik_vel_solver = None
         self.num_joints = 0
-        self.urdf_xml = None # Stockage de l'URDF
+        self.joint_names = [] # Pour stocker l'ordre exact de la chaîne KDL
+        self.urdf_xml = None
         self.kdl_initialized = False
+
+        # Variables de contrôle
+        self.target_twist = PyKDL.Twist() # Vitesse désirée (0 par défaut)
+        self.last_cmd_time = 0.0          # Pour le watchdog
+        self.cmd_timeout = 0.5            # Arrêt après 0.5s sans commande
+        self.current_joint_positions = {} # Dictionnaire {nom: position}
 
         # --- Initialisation des Paramètres ---
         self.declare_parameter('robot_description_str', '') 
         param_desc = self.get_parameter('robot_description_str').value
         if param_desc:
             self.urdf_xml = param_desc
-
-        # --- Timer de réessai (1 Hz) ---
-        # C'est ici que la magie opère : on vérifie chaque seconde si on peut initialiser
-        self.init_timer = self.create_timer(1.0, self.initialization_timer_callback)
 
         # --- Subscribers & Publishers ---
         self.create_subscription(
@@ -72,14 +76,14 @@ class CartesianToJointVelocity(Node):
             qos_profile=rclpy.qos.QoSProfile(depth=1, durability=rclpy.qos.QoSDurabilityPolicy.TRANSIENT_LOCAL)
         )
         
-        self.sub_joint_states = self.create_subscription(
+        self.create_subscription(
             JointState,
             '/joint_states',
             self.joint_state_callback,
             10
         )
 
-        self.sub_cmd_vel = self.create_subscription(
+        self.create_subscription(
             Twist,
             '/cmd_vel_input',
             self.cmd_vel_callback,
@@ -91,113 +95,127 @@ class CartesianToJointVelocity(Node):
             '/forward_velocity_controller/commands',
             10
         )
+
+        # --- Timers ---
+        # 1. Timer d'initialisation (1 Hz)
+        self.init_timer = self.create_timer(1.0, self.initialization_timer_callback)
+        
+        # 2. Timer de contrôle (100 Hz) - C'est lui qui publie en continu !
+        self.control_timer = self.create_timer(0.01, self.control_loop)
         
         self.current_q = None
         self.get_logger().info("Nœud démarré. En attente de configuration...")
 
     def robot_description_callback(self, msg):
-        """Stocke l'URDF reçu pour que le Timer l'utilise"""
         if not self.urdf_xml:
-            self.get_logger().info("URDF reçu via topic ! Stockage en mémoire.")
+            self.get_logger().info("URDF reçu via topic.")
             self.urdf_xml = msg.data
 
     def initialization_timer_callback(self):
-        """Tente d'initialiser KDL en boucle jusqu'à succès"""
         if self.kdl_initialized:
-            # Si c'est déjà bon, on ne fait rien (ou on pourrait détruire le timer)
             return
 
         if not self.urdf_xml:
             self.get_logger().warn("En attente du robot description...", throttle_duration_sec=2.0)
             return
 
-        # Tentative d'initialisation
         success = self.init_kdl_from_xml(self.urdf_xml)
         if success:
             self.get_logger().info(">>> KDL INITIALISÉ AVEC SUCCÈS ! <<<")
             self.kdl_initialized = True
-            # Optionnel : Arrêter le timer pour économiser des ressources
             self.init_timer.cancel()
-        else:
-            self.get_logger().error("Échec initialisation KDL (Chaîne vide). Nouvelle tentative dans 1s...")
 
     def init_kdl_from_xml(self, xml_string):
         try:
             robot_urdf = URDF.from_xml_string(xml_string)
             ok, self.kdl_tree = urdf_to_kdl(robot_urdf)        
-            if not ok:
-                return False
+            if not ok: return False
 
-            # On essaie de trouver une chaîne valide parmi les bases possibles
             found_chain = False
-            
             for base in self.possible_base_links:
                 try:
                     chain = self.kdl_tree.getChain(base, self.end_effector_link)
-                    n_joints = chain.getNrOfJoints()
-                    
-                    if n_joints > 0:
+                    if chain.getNrOfJoints() > 0:
                         self.kdl_chain = chain
-                        self.num_joints = n_joints
-                        self.get_logger().info(f"Chaîne trouvée entre '{base}' et '{self.end_effector_link}' avec {n_joints} joints.")
+                        self.num_joints = chain.getNrOfJoints()
+                        self.get_logger().info(f"Chaîne: {base} -> {self.end_effector_link} ({self.num_joints} joints)")
                         found_chain = True
-                        break # Sort de la boucle for
-                    else:
-                        self.get_logger().debug(f"Chaîne vide pour base '{base}'")
-                except Exception:
-                    pass
+                        break
+                except Exception: pass
             
-            if not found_chain:
-                self.get_logger().warn(f"Impossible de trouver une chaîne vers '{self.end_effector_link}' (Joints=0).")
-                self.get_logger().warn(f"Links testés comme base: {self.possible_base_links}")
-                return False
+            if not found_chain: return False
 
-            # Initialisation du solver et des vecteurs
+            # Récupérer les noms des joints dans l'ordre de la chaîne KDL
+            self.joint_names = []
+            for i in range(self.num_joints):
+                segment = self.kdl_chain.getSegment(i)
+                self.joint_names.append(segment.getJoint().getName())
+            
+            self.get_logger().info(f"Ordre des joints KDL: {self.joint_names}")
+
             self.ik_vel_solver = PyKDL.ChainIkSolverVel_pinv(self.kdl_chain)
             self.current_q = PyKDL.JntArray(self.num_joints)
-            
             return True
 
         except Exception as e:
-            self.get_logger().error(f"Exception lors du parsing KDL: {e}")
+            self.get_logger().error(f"Erreur init KDL: {e}")
             return False
     
     def joint_state_callback(self, msg):
-        if not self.kdl_initialized or self.current_q is None:
-            return
-        
-        # Note simplifiée : on suppose que l'ordre correspond. 
-        # Pour une vraie robustesse, il faut mapper joint_names -> indices
-        if len(msg.position) >= self.num_joints:
-            for i in range(self.num_joints):
-                self.current_q[i] = msg.position[i]
+        # On stocke simplement les positions dans un dictionnaire pour accès rapide par nom
+        for name, pos in zip(msg.name, msg.position):
+            self.current_joint_positions[name] = pos
 
     def cmd_vel_callback(self, msg):
-        if not self.kdl_initialized:
-            return
-
+        # On met à jour la consigne et le timestamp
         v_linear = PyKDL.Vector(msg.linear.x, msg.linear.y, msg.linear.z)
         v_angular = PyKDL.Vector(msg.angular.x, msg.angular.y, msg.angular.z)
-        kdl_twist = PyKDL.Twist(v_linear, v_angular)
+        self.target_twist = PyKDL.Twist(v_linear, v_angular)
+        self.last_cmd_time = time.time()
 
+    def control_loop(self):
+        """Boucle principale exécutée à 100Hz"""
+        if not self.kdl_initialized or not self.joint_names:
+            return
+
+        # 1. Mise à jour de current_q (Joint positions)
+        # On s'assure d'avoir reçu les états de tous les joints nécessaires
+        try:
+            for i, name in enumerate(self.joint_names):
+                if name in self.current_joint_positions:
+                    self.current_q[i] = self.current_joint_positions[name]
+                else:
+                    # Si on n'a pas encore l'état d'un joint, on attend
+                    return 
+        except Exception:
+            return
+
+        # 2. Watchdog de sécurité
+        # Si pas de commande depuis X secondes, on force la vitesse à 0
+        if (time.time() - self.last_cmd_time) > self.cmd_timeout:
+            active_twist = PyKDL.Twist() # Vitesse nulle
+        else:
+            active_twist = self.target_twist
+
+        # 3. Calcul Cinématique Inverse (IK)
         q_dot_out = PyKDL.JntArray(self.num_joints)
-        ret = self.ik_vel_solver.CartToJnt(self.current_q, kdl_twist, q_dot_out)
+        ret = self.ik_vel_solver.CartToJnt(self.current_q, active_twist, q_dot_out)
 
+        # 4. Publication
         if ret >= 0:
             out_msg = Float64MultiArray()
+            # On extrait les données du JntArray
             out_msg.data = [q_dot_out[i] for i in range(self.num_joints)]
             self.pub_joint_vel.publish(out_msg)
 
 def main(args=None):
     rclpy.init(args=args)
     node = CartesianToJointVelocity()
-    
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        # Correction pour éviter l'erreur de shutdown double
         if rclpy.ok():
             node.destroy_node()
             rclpy.shutdown()
