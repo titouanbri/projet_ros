@@ -39,6 +39,8 @@ class UR3eIVK(Node):
 
         # Subscribers
         self.create_subscription(Twist, "/ee_velocity_cmd", self.cmd_in_callback, 1)
+        # self.create_subscription(Twist, "/ur3/end_effector_vel_cmd", self.cmd_in_callback, 1)
+
         self.create_subscription(JointState, "/joint_states", self.joint_state_callback, 1)
 
         # Publisher
