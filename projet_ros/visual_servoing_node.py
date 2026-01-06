@@ -41,7 +41,7 @@ class VisualServoingNode(Node):
         )
         
         # Publication : Vitesse du End-Effector (Twist)
-        self.vel_pub = self.create_publisher(Twist, '/ur3/end_effector_vel_cmd', 10)
+        self.vel_pub = self.create_publisher(Twist, '/forward_velocity_controller/commands', 10)
 
     def compute_features_from_pose(self, trans_vec, rot_mat):
         """
