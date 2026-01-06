@@ -37,6 +37,7 @@ setup(
             'aruko_detection = projet_ros.aruko_detection:main',
             'cart_vel_panel = projet_ros.cart_vel_panel:main',
             'ivk = projet_ros.ivk:main',
+            'DLT_3D_pose = projet_ros.DLT_3D_pose:main',
 
         ],
     },
