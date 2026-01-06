@@ -38,6 +38,7 @@ setup(
             'cart_vel_panel = projet_ros.cart_vel_panel:main',
             'ivk = projet_ros.ivk:main',
             'DLT_3D_pose = projet_ros.DLT_3D_pose:main',
+            'visual_servoing_node = projet_ros.visual_servoing_node:main',
 
         ],
     },
