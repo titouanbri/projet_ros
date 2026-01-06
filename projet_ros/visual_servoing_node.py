@@ -1,162 +1,182 @@
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import Twist, Polygon 
 import numpy as np
-from scipy.spatial.transform import Rotation as R
+import time
 
 class VisualServoingNode(Node):
     def __init__(self):
         super().__init__('visual_servoing_node')
 
-        # --- Paramètres ---
-        self.declare_parameter('lambda_gain', 1.0)  # Gain de commande [cite: 49]
-        self.lambda_gain = self.get_parameter('lambda_gain').value
+        # --- 1. Paramètres de la Caméra ---
+        self.fx = 800.0
+        self.fy = 800.0
+        self.u0 = 320.0
+        self.v0 = 240.0
         
-        # Définition des points de l'objet (Pattern) dans son propre repère
-        # Supposons un carré de 10cm x 10cm centré (comme le "pattern_points" du TP [cite: 59])
-        s = 0.05 # demi-côté
-        self.object_points = np.array([
-            [-s, -s, 0],
-            [ s, -s, 0],
-            [ s,  s, 0],
-            [-s,  s, 0]
-        ]).T  # Shape (3, 4)
+        # --- 2. Configuration de l'algorithme ---
+        self.lmbda = 0.5 
+        self.Z_est = 1.0 
 
-        # --- Définition de la vue désirée (s*) ---
-        # On définit s* en simulant une pose désirée (ex: à 50cm face à l'objet)
-        # [cite: 34, 35]
-        self.s_star = self.compute_features_from_pose(
-            trans_vec=np.array([0.0, 0.0, 0.5]), 
-            rot_mat=np.eye(3)
-        )
-        self.get_logger().info(f"Features désirés (s*): {self.s_star.flatten()}")
+        # --- SECURITE UR3 (Nouveaux paramètres) ---
+        # Limites strictes pour un UR3 (valeurs conservatrices pour commencer)
+        self.MAX_LIN_VEL = 0.03    # m/s (10 cm/s)
+        self.MAX_ANG_VEL = 0.06    # rad/s
+        self.MAX_LIN_ACC = 0.05   # m/s^2 (Accélération max par pas de temps)
+        self.MAX_ANG_ACC = 0.1    # rad/s^2
+        
+        # Mémoire pour le lissage de l'accélération
+        self.prev_linear = np.zeros(3)
+        self.prev_angular = np.zeros(3)
+        self.last_time = self.get_clock().now()
 
-        # --- Communication ROS ---
-        # Abonnement : Pose de l'objet par rapport à la caméra (End-Effector)
-        self.pose_sub = self.create_subscription(
-            PoseStamped,
-            '/aruco/pose', 
+        # --- 3. Définition de la Cible (s*) ---
+        target_pixels = [
+            (220, 140), 
+            (420, 140), 
+            (420, 340), 
+            (220, 340) 
+        ]
+        
+        self.s_star = []
+        for (u, v) in target_pixels:
+            x, y = self.pixel_to_normalized(u, v)
+            self.s_star.extend([x, y])
+        self.s_star = np.array(self.s_star).reshape(-1, 1)
+
+        # --- 4. ROS Publishers & Subscribers ---
+        self.publisher_vel = self.create_publisher(Twist, '/ee_velocity_cmd', 10)
+        
+        self.subscription = self.create_subscription(
+            Polygon,
+            '/aruco/corners_pixels', 
             self.control_loop,
-            10
-        )
-        
-        # Publication : Vitesse du End-Effector (Twist)
-        self.vel_pub = self.create_publisher(Twist, '/ur3/end_effector_vel_cmd', 10)
+            10) # 10Hz -> dt approx 0.1s
+            
+        self.get_logger().info("Visual Servoing Node Initialized with Safety Limits.")
 
-    def compute_features_from_pose(self, trans_vec, rot_mat):
-        """
-        Calcule les coordonnées normalisées (x, y) pour les 4 points.
-        Correspond aux étapes de projection du TP [cite: 60-64].
-        """
-        features = []
-        for i in range(4):
-            # Point dans le repère Objet
-            P_obj = np.append(self.object_points[:, i], 1) # [X, Y, Z, 1]
-            
-            # Transformation Monde/Objet -> Caméra A [cite: 60]
-            # T_mat = [R t; 0 1]
-            T_mat = np.eye(4)
-            T_mat[:3, :3] = rot_mat
-            T_mat[:3, 3] = trans_vec
-            
-            P_cam = T_mat @ P_obj # Coordonnées dans la caméra
-            
-            X, Y, Z = P_cam[0], P_cam[1], P_cam[2]
-            
-            # Coordonnées normalisées (x=X/Z, y=Y/Z) 
-            # Attention à la division par zéro
-            if Z <= 0.01: Z = 0.01 
-            x = X / Z
-            y = Y / Z
-            features.extend([x, y])
-            
-        return np.array(features).reshape(-1, 1) # Vecteur colonne 8x1
+    def pixel_to_normalized(self, u, v):
+        x = (u - self.u0) / self.fx
+        y = (v - self.v0) / self.fy
+        return x, y
 
-    def compute_interaction_matrix(self, current_features, Z_estimated):
+    def compute_interaction_matrix_point(self, x, y, Z):
+        L_i = np.array([
+            [-1.0/Z,  0.0,    x/Z,      x*y,       -(1 + x**2),  y],
+            [ 0.0,   -1.0/Z,  y/Z,      1 + y**2,  -x*y,         -x]
+        ])
+        return L_i
+
+    def limit_velocity_vector(self, v_vector, max_val):
         """
-        Construit la matrice L en empilant les sous-matrices Li pour chaque point.
-        Formule exacte du document [cite: 16, 71-77].
+        Reduit la norme du vecteur sans changer sa direction
         """
-        L = []
-        # current_features est un vecteur plat [x1, y1, x2, y2, ...]
-        num_points = 4
+        norm = np.linalg.norm(v_vector)
+        if norm > max_val:
+            scale = max_val / norm
+            return v_vector * scale
+        return v_vector
+
+    def limit_acceleration(self, target_v, prev_v, max_acc, dt):
+        """
+        Limite le changement de vitesse (accélération)
+        """
+        diff = target_v - prev_v
+        max_change = max_acc * dt # Delta V max autorisé pour ce pas de temps
         
-        for i in range(num_points):
-            x = current_features[2*i, 0]
-            y = current_features[2*i+1, 0]
-            Z = Z_estimated # Approximation: on utilise souvent le Z courant ou Z*
+        # Si le changement est trop brusque, on le cape
+        diff_norm = np.linalg.norm(diff)
+        if diff_norm > max_change:
+            diff = diff * (max_change / diff_norm)
             
-            # Matrice d'interaction pour un point [cite: 16]
-            # [-1/Z, 0, x/Z, xy, -(1+x^2), y]
-            # [0, -1/Z, y/Z, 1+y^2, -xy, -x]
-            L_i = np.array([
-                [-1/Z, 0,    x/Z, x*y,       -(1+x**2), y],
-                [0,    -1/Z, y/Z, (1+y**2),  -x*y,      -x]
-            ])
-            L.append(L_i)
-            
-        return np.vstack(L) # Matrix 8x6
+        return prev_v + diff
 
     def control_loop(self, msg):
-        """
-        Boucle principale [cite: 37]
-        """
-        # 1. Récupérer la pose actuelle (Caméra -> Objet)
-        # Attention: msg.pose est la pose de l'objet vue par la caméra
-        tx = msg.pose.position.x
-        ty = msg.pose.position.y
-        tz = msg.pose.position.z
-        
-        q = msg.pose.orientation
-        r = R.from_quat([q.x, q.y, q.z, q.w])
-        rot_mat = r.as_matrix()
-        trans_vec = np.array([tx, ty, tz])
+        # Gestion du temps pour l'accélération
+        current_time = self.get_clock().now()
+        dt = (current_time - self.last_time).nanoseconds / 1e9
+        if dt == 0: dt = 0.1 # Sécurité division par zéro
+        self.last_time = current_time
 
-        # 2. Mesurer les points courants s(t) [cite: 38]
-        s_current = self.compute_features_from_pose(trans_vec, rot_mat)
-
-        # 3. Calculer l'erreur e = s(t) - s* [cite: 14, 39, 81]
-        error = s_current - self.s_star
-        
-        # Critère d'arrêt simple (norme de l'erreur)
-        if np.linalg.norm(error) < 0.01:
-            self.publish_velocity(np.zeros(6))
+        if len(msg.points) != 4:
+            self.get_logger().warn(f"Mauvais nombre de points: {len(msg.points)}")
+            # En cas de perte de tracking, on envoie STOP par sécurité
+            stop_msg = Twist()
+            self.publisher_vel.publish(stop_msg)
             return
 
-        # 4. Calculer la matrice d'interaction L [cite: 40, 78]
-        # On utilise le Z courant de la pose pour l'estimation de profondeur
-        L = self.compute_interaction_matrix(s_current, Z_estimated=tz)
-
-        # 5. Calculer la loi de commande: v = -lambda * pseudo_inverse(L) * e
-        # [cite: 15, 27, 42, 83]
-        L_pinv = np.linalg.pinv(L)
-        v_camera = -self.lambda_gain * (L_pinv @ error)
-
-        # 6. Envoyer la commande au robot
-        self.publish_velocity(v_camera.flatten())
-
-    def publish_velocity(self, v_vec):
-        """
-        Publie le message Twist pour l'End-Effector
-        v_vec = [vx, vy, vz, wx, wy, wz] dans le repère caméra
-        """
-        twist = Twist()
-        # [cite: 102, 104]
-        twist.linear.x = float(v_vec[0])
-        twist.linear.y = float(v_vec[1])
-        twist.linear.z = float(v_vec[2])
-        twist.angular.x = float(v_vec[3])
-        twist.angular.y = float(v_vec[4])
-        twist.angular.z = float(v_vec[5])
+        # 1. & 2. Mesure et Interaction
+        current_features = []
+        L_stack = [] 
         
-        self.vel_pub.publish(twist)
+        for point in msg.points:
+            x, y = self.pixel_to_normalized(point.x, point.y)
+            current_features.extend([x, y])
+            L_i = self.compute_interaction_matrix_point(x, y, self.Z_est)
+            L_stack.append(L_i)
+
+        s_current = np.array(current_features).reshape(-1, 1)
+        L = np.vstack(L_stack)
+
+        # 3. Calcul de l'erreur
+        error = s_current - self.s_star
+
+        # 4. Loi de commande brute
+        try:
+            L_pinv = np.linalg.pinv(L)
+        except np.linalg.LinAlgError:
+            self.get_logger().error("Erreur inversion matrice")
+            return
+
+        velocity_raw = -self.lmbda * np.dot(L_pinv, error)
+        
+        # Séparation Linéaire / Angulaire
+        v_lin_raw = velocity_raw[0:3].flatten()
+        v_ang_raw = velocity_raw[3:6].flatten()
+
+        # --- 5. APPLICATION DES LIMITES DE SECURITE ---
+
+        # A. Saturation de Vitesse (Scaling)
+        # On s'assure que le vecteur ne dépasse pas MAX_LIN_VEL tout en gardant la direction
+        v_lin_clamped = self.limit_velocity_vector(v_lin_raw, self.MAX_LIN_VEL)
+        v_ang_clamped = self.limit_velocity_vector(v_ang_raw, self.MAX_ANG_VEL)
+
+        # B. Limitation d'Accélération (Smoothing)
+        # On lisse la transition entre la vitesse précédente et la nouvelle cible
+        v_lin_final = self.limit_acceleration(v_lin_clamped, self.prev_linear, self.MAX_LIN_ACC, dt)
+        v_ang_final = self.limit_acceleration(v_ang_clamped, self.prev_angular, self.MAX_ANG_ACC, dt)
+
+        # Mise à jour de la mémoire pour la prochaine boucle
+        self.prev_linear = v_lin_final
+        self.prev_angular = v_ang_final
+
+        # 6. Publication
+        cmd_msg = Twist()
+        cmd_msg.linear.x = v_lin_final[0]
+        cmd_msg.linear.y = v_lin_final[1]
+        cmd_msg.linear.z = v_lin_final[2]
+        cmd_msg.angular.x = v_ang_final[0]
+        cmd_msg.angular.y = v_ang_final[1]
+        cmd_msg.angular.z = v_ang_final[2]
+
+        self.publisher_vel.publish(cmd_msg)
+        
+        # Debug optionnel
+        # error_norm = np.linalg.norm(error)
+        # self.get_logger().info(f"Err: {error_norm:.3f} | V_lin: {np.linalg.norm(v_lin_final):.3f}")
 
 def main(args=None):
     rclpy.init(args=args)
     node = VisualServoingNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        # Arrêt propre en cas de CTRL+C
+        stop_msg = Twist()
+        node.publisher_vel.publish(stop_msg)
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
