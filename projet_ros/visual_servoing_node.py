@@ -35,7 +35,7 @@ class VisualServoingNode(Node):
         # Abonnement : Pose de l'objet par rapport à la caméra (End-Effector)
         self.pose_sub = self.create_subscription(
             PoseStamped,
-            '/object_pose_in_camera_frame', 
+            '/aruco/pose', 
             self.control_loop,
             10
         )
