@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+#WRT END EFFECTOR COORDINATE FRAME
+
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
