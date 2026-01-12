@@ -39,6 +39,7 @@ setup(
             'ivk = projet_ros.ivk:main',
             'visual_servoing_node = projet_ros.visual_servoing_node:main',
             'pbvs_node = projet_ros.pbvs_node:main',
+            'camera_tf_broadcaster = projet_ros.camera_tf_broadcaster:main',
 
         ],
     },
