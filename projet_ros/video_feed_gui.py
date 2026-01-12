@@ -20,7 +20,7 @@ window_h=0
 class Front(Node):
     def __init__(self):
         super().__init__("video_feed_gui") 
-        self.sub_cam=self.create_subscription(Image,'/yolo/smartphone_result',self.process,10) #subscribe to /camera topic
+        self.sub_cam=self.create_subscription(Image,'/detection_results',self.process,10) #subscribe to /camera topic
         self.cam_debug=self.create_publisher(CompressedImage,'/cam_debug',10) #used to check if subbing is working
         self.cv_bridge=CvBridge()
         self.img= None

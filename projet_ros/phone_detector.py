@@ -13,14 +13,14 @@ import numpy as np
 from ultralytics import YOLO
 
 
-class YoloSmartphoneNode(Node):
+class DetectionNode(Node):
     def __init__(self):
-        super().__init__('yolo_smartphone_node')
+        super().__init__('detection_node')
 
-        self.get_logger().info("YOLO Smartphone Tracking (fast-motion robust)")
+        self.get_logger().info("Detection Node initialized")
 
         # --- YOLO ---
-        self.model = YOLO("models/yolo11s.pt")
+        self.model = YOLO("models/puck_detector_n.pt")
 
         # --- ROS ---
         self.br = CvBridge()
@@ -33,13 +33,13 @@ class YoloSmartphoneNode(Node):
 
         self.image_pub = self.create_publisher(
             Image,
-            '/yolo/smartphone_result',
+            '/detection_results',
             10
         )
 
         self.center_pub = self.create_publisher(
             Point,
-            '/yolo/smartphone_center',
+            '/detected_center',
             10
         )
 
@@ -66,7 +66,7 @@ class YoloSmartphoneNode(Node):
         results = self.model.track(
             source=cv_image,
             persist=True,
-            classes=[67],
+            classes=[0], #scissors, very good
             conf=self.conf_threshold,
             verbose=False
         )
@@ -173,7 +173,7 @@ class YoloSmartphoneNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = YoloSmartphoneNode()
+    node = DetectionNode()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
