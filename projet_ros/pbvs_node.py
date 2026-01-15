@@ -33,7 +33,7 @@ class PBVSNode(Node):
         
         # Définition de la Pose Désirée du Marqueur dans la Caméra (T_des)
         # Identique à avant : Marqueur à 30cm devant, Z opposés.
-        rot_target = R.from_euler('x', 180, degrees=True).as_matrix()
+        rot_target = R.from_euler('x', -180, degrees=True).as_matrix()
         pos_target = np.array([0.0, 0.0, self.dist_target])
         
         self.T_des = np.eye(4)
@@ -80,6 +80,18 @@ class PBVSNode(Node):
                 self.target_frame,      # Source frame (Object)
                 rclpy.time.Time()
             )
+            # Vérification de l'âge de la TF (eviter de garder de garder un ghost)
+            now = self.get_clock().now()
+            # Temps de la TF reçue
+            tf_time = rclpy.time.Time.from_msg(t_cam_marker.header.stamp)
+            # Différence en secondes
+            age = (now - tf_time).nanoseconds / 1e9
+            
+            if age > 0.5:
+                # La donnée est trop vieille (> 0.5s), le marqueur n'est probablement plus là
+                # self.get_logger().warn(f"TF trop vieille : {age:.2f}s")
+                self.vel_pub.publish(Twist()) # STOP
+                return
         except TransformException as ex:
             # Si la TF n'est pas dispo (ex: marqueur non visible), on arrête.
             # self.get_logger().warn(f'Pas de TF marker: {ex}')
@@ -88,7 +100,8 @@ class PBVSNode(Node):
 
         # Conversion en matrice T_curr
         T_curr = self.transform_to_matrix(t_cam_marker)
-
+        #on ingore la rotation 
+        T_curr[:3, :3] = self.T_des[:3, :3]
         # 2. Calcul de l'erreur dans le repère CAMÉRA
         # X = T_des * inv(T_curr)
         X = self.T_des @ np.linalg.inv(T_curr)
@@ -100,8 +113,8 @@ class PBVSNode(Node):
         rot_vec = r_obj.as_rotvec()
 
         # Loi de commande PBVS (v_cam, w_cam sont exprimés dans le repère Caméra)
-        v_cam = -self.lmbda * (R_mat.T @ t_vec)
-        w_cam = -self.lmbda * rot_vec
+        v_cam = -self.lmbda * (R_mat.T @ t_vec)*(-1)
+        w_cam = -self.lmbda * rot_vec*(-1)
 
         # 3. Correction cinématique : Passage du repère Caméra au repère Effecteur (Tool)
         # On a besoin de la TF Tool -> Camera pour savoir comment la caméra est montée

@@ -12,21 +12,30 @@ def generate_launch_description():
         PythonLaunchDescriptionSource([
             FindPackageShare("realsense2_camera"), '/launch/rs_launch.py'
         ]),
-        # Vous pouvez ajouter des arguments ici si nécessaire, par exemple :
+        # Vous pouvez ajouter des arguments ici si nécessaire
         # launch_arguments={'align_depth.enable': 'true'}.items(),
     )
 
     # 2. Lancement du noeud de détection Aruco
     # Commande équivalente : ros2 run projet_ros aruko_detection
-    # (Note : le nom du package est 'projet_ros' selon votre setup.py)
     aruco_node = Node(
-        package='projet_ros',          # Nom exact du package
-        executable='aruko_detection',  # Nom défini dans entry_points console_scripts
+        package='projet_ros',
+        executable='aruko_detection',
         name='aruko_detection',
+        output='screen'
+    )
+
+    # 3. Lancement du broadcaster TF pour la caméra
+    # Commande équivalente : ros2 run projet_ros camera_tf_broadcaster
+    tf_broadcaster_node = Node(
+        package='projet_ros',          # Nom exact du package
+        executable='camera_tf_broadcaster', # Nom de l'exécutable
+        name='camera_tf_broadcaster',
         output='screen'
     )
 
     return LaunchDescription([
         realsense_launch,
-        aruco_node
+        aruco_node,
+        tf_broadcaster_node
     ])
