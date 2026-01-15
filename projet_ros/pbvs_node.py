@@ -18,14 +18,9 @@ class PBVSNode(Node):
         
         # Noms des frames TF
         # 'aruco_0' est l'ID par défaut. Si vous utilisez un autre ID, changez ce paramètre.
-        self.declare_parameter('target_frame', 'aruco_0')
-        self.target_frame = self.get_parameter('target_frame').get_parameter_value().string_value
-        
-        self.declare_parameter('camera_frame', 'camera_link')
-        self.camera_frame = self.get_parameter('camera_frame').get_parameter_value().string_value
-        
-        self.declare_parameter('tool_frame', 'tool0')
-        self.tool_frame = self.get_parameter('tool_frame').get_parameter_value().string_value
+        self.target_frame = 'aruco_0'
+        self.camera_frame = 'camera_link' 
+        self.tool_frame = 'tool0'
         
         # --- SÉCURITÉ UR3 ---
         self.MAX_LIN_VEL = 0.05  # m/s
@@ -50,8 +45,7 @@ class PBVSNode(Node):
         # Timer de contrôle (10 Hz)
         self.timer = self.create_timer(0.1, self.control_loop)
         
-        self.get_logger().info("Nœud PBVS (TF Based) démarré.")
-        self.get_logger().info(f"Cible : {self.target_frame} via {self.camera_frame}")
+        self.get_logger().info("node launched")
 
     def transform_to_matrix(self, t_stamped):
         """Convertit un message Geometry/Transform en matrice Numpy 4x4"""
