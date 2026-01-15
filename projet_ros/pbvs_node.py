@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist, PoseStamped
+from geometry_msgs.msg import Twist, TransformStamped
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
 from scipy.spatial.transform import Rotation as R
 import numpy as np
 
@@ -13,15 +16,23 @@ class PBVSNode(Node):
         self.lmbda = 1.0        # Gain proportionnel (lambda)
         self.dist_target = 0.3  # Distance désirée (30 cm)
         
+        # Noms des frames TF
+        # 'aruco_0' est l'ID par défaut. Si vous utilisez un autre ID, changez ce paramètre.
+        self.declare_parameter('target_frame', 'aruco_0')
+        self.target_frame = self.get_parameter('target_frame').get_parameter_value().string_value
+        
+        self.declare_parameter('camera_frame', 'camera_link')
+        self.camera_frame = self.get_parameter('camera_frame').get_parameter_value().string_value
+        
+        self.declare_parameter('tool_frame', 'tool0')
+        self.tool_frame = self.get_parameter('tool_frame').get_parameter_value().string_value
+        
         # --- SÉCURITÉ UR3 ---
         self.MAX_LIN_VEL = 0.05  # m/s
-        self.MAX_ANG_VEL = 0.5  # rad/s
+        self.MAX_ANG_VEL = 0.5   # rad/s
         
         # Définition de la Pose Désirée du Marqueur dans la Caméra (T_des)
-        # On veut le marqueur à 'dist_target' devant la caméra (axe Z).
-        # Orientation : Le repère Aruco a Z sortant. La caméra a Z devant.
-        # Pour faire face, il faut une rotation de 180° autour de X (ou Y) pour opposer les Z.
-        # Matrice de rotation pour 180° autour de X :
+        # Identique à avant : Marqueur à 30cm devant, Z opposés.
         rot_target = R.from_euler('x', 180, degrees=True).as_matrix()
         pos_target = np.array([0.0, 0.0, self.dist_target])
         
@@ -29,25 +40,27 @@ class PBVSNode(Node):
         self.T_des[:3, :3] = rot_target
         self.T_des[:3, 3] = pos_target
 
-        # Publishers & Subscribers
-        self.pose_sub = self.create_subscription(
-            PoseStamped, 
-            '/aruco/pose', 
-            self.control_loop, 
-            10
-        )
+        # --- SETUP TF ---
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        # Publisher vitesse
         self.vel_pub = self.create_publisher(Twist, '/ee_velocity_cmd', 10)
         
-        self.get_logger().info("Nœud PBVS (Position Based Visual Servoing) démarré.")
-        self.get_logger().info(f"Cible : Marqueur à {self.dist_target}m en face.")
+        # Timer de contrôle (10 Hz)
+        self.timer = self.create_timer(0.1, self.control_loop)
+        
+        self.get_logger().info("Nœud PBVS (TF Based) démarré.")
+        self.get_logger().info(f"Cible : {self.target_frame} via {self.camera_frame}")
 
-    def transform_from_pose(self, pose):
-        """Convertit geometry_msgs/Pose en matrice 4x4"""
-        t = np.array([pose.position.x, pose.position.y, pose.position.z])
-        q = np.array([pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w])
+    def transform_to_matrix(self, t_stamped):
+        """Convertit un message Geometry/Transform en matrice Numpy 4x4"""
+        t = t_stamped.transform.translation
+        r = t_stamped.transform.rotation
+        
         mat = np.eye(4)
-        mat[:3, :3] = R.from_quat(q).as_matrix()
-        mat[:3, 3] = t
+        mat[:3, :3] = R.from_quat([r.x, r.y, r.z, r.w]).as_matrix()
+        mat[:3, 3] = [t.x, t.y, t.z]
         return mat
 
     def limit_velocity(self, v, max_val):
@@ -57,49 +70,81 @@ class PBVSNode(Node):
             return v * (max_val / norm)
         return v
 
-    def control_loop(self, msg):
-        # 1. Récupération de la pose actuelle (T_curr = Marker dans Caméra)
-        T_curr = self.transform_from_pose(msg.pose)        
+    def control_loop(self):
+        # 1. Récupération de la Pose Actuelle via TF (Camera -> Marker)
+        try:
+            # On cherche la transformation du repère Caméra VERS le Marqueur
+            # Cela correspond à la pose du marqueur dans la caméra.
+            t_cam_marker = self.tf_buffer.lookup_transform(
+                self.camera_frame,      # Target frame (Reference)
+                self.target_frame,      # Source frame (Object)
+                rclpy.time.Time()
+            )
+        except TransformException as ex:
+            # Si la TF n'est pas dispo (ex: marqueur non visible), on arrête.
+            # self.get_logger().warn(f'Pas de TF marker: {ex}')
+            self.vel_pub.publish(Twist()) # Stop
+            return
+
+        # Conversion en matrice T_curr
+        T_curr = self.transform_to_matrix(t_cam_marker)
+
+        # 2. Calcul de l'erreur dans le repère CAMÉRA
+        # X = T_des * inv(T_curr)
         X = self.T_des @ np.linalg.inv(T_curr)
 
-        # Extraction Rotation (R) et Translation (t) de l'erreur
         R_mat = X[:3, :3]
         t_vec = X[:3, 3]
 
-        # 3. Calcul de l'axe-angle (theta * u) pour la rotation
-        r = R.from_matrix(R_mat)
-        rot_vec = r.as_rotvec() # Cela correspond à (theta * u)
+        r_obj = R.from_matrix(R_mat)
+        rot_vec = r_obj.as_rotvec()
 
-        # 4. Loi de Commande (Formule (5) du TP page 2)
-        # v = -lambda * R^T * t
-        # omega = -lambda * theta * u
+        # Loi de commande PBVS (v_cam, w_cam sont exprimés dans le repère Caméra)
+        v_cam = -self.lmbda * (R_mat.T @ t_vec)
+        w_cam = -self.lmbda * rot_vec
+
+        # 3. Correction cinématique : Passage du repère Caméra au repère Effecteur (Tool)
+        # On a besoin de la TF Tool -> Camera pour savoir comment la caméra est montée
+        try:
+            t_tool_cam = self.tf_buffer.lookup_transform(
+                self.tool_frame,
+                self.camera_frame,
+                rclpy.time.Time()
+            )
+        except TransformException as ex:
+            self.get_logger().error(f'TF Tool->Cam manquante : {ex}')
+            self.vel_pub.publish(Twist())
+            return
+
+        # Matrice de transformation Tool -> Cam
+        T_tc = self.transform_to_matrix(t_tool_cam)
+        R_tc = T_tc[:3, :3] # Rotation
+        P_tc = T_tc[:3, 3]  # Translation (Bras de levier)
+
+        # Transformation de la vitesse (Adjoint Map / Rigid Body Velocity)
+        # On veut V_tool tel que la caméra bouge à V_cam.
+        # Formule : V_tool = V_cam_in_tool + P_tc x W_cam_in_tool
         
-        # Note: R^T * t ramène le vecteur translation du repère B au repère A (Caméra actuelle)
-        # C'est nécessaire car on doit envoyer une vitesse exprimée dans le repère courant de la caméra.
+        # D'abord, on tourne les vecteurs vitesse pour les aligner avec Tool
+        v_cam_in_tool = R_tc @ v_cam
+        w_cam_in_tool = R_tc @ w_cam
         
-        v_lin = -self.lmbda * (R_mat.T @ t_vec)
-        v_ang = -self.lmbda * rot_vec
+        # Ensuite on applique le produit vectoriel pour le bras de levier
+        # v_tool = v_cam (rot) + cross(P_tc, w_cam (rot))
+        v_tool = v_cam_in_tool + np.cross(P_tc, w_cam_in_tool)
+        w_tool = w_cam_in_tool
 
-        # 5. Sécurité et Saturation
-        v_lin = self.limit_velocity(v_lin, self.MAX_LIN_VEL)
-        v_ang = self.limit_velocity(v_ang, self.MAX_ANG_VEL)
+        # 4. Saturation et Envoi
+        v_tool = self.limit_velocity(v_tool, self.MAX_LIN_VEL)
+        w_tool = self.limit_velocity(w_tool, self.MAX_ANG_VEL)
 
-        # 6. Envoi de la commande
         cmd = Twist()
-        # On inverse les axes si nécessaire selon le repère de contrôle du robot (ivk.py)
-        # Généralement ivk.py attend x=devant/droite, mais la caméra a z=devant.
-        # Si la caméra est montée telle quelle sur l'effecteur, le repère caméra est :
-        # Z (optique) aligné avec Z (effecteur) ? A vérifier.
-        # Souvent : Z_cam = X_ee ou Z_ee. 
-        # Ici on envoie la commande dans le repère "Caméra". 
-        # Si ivk.py contrôle l'effecteur et que la caméra est l'effecteur, c'est bon.
-        
-        cmd.linear.x = float(v_lin[0])
-        cmd.linear.y = float(v_lin[1])
-        cmd.linear.z = float(v_lin[2])
-        cmd.angular.x = float(v_ang[0])
-        cmd.angular.y = float(v_ang[1])
-        cmd.angular.z = float(v_ang[2])
+        cmd.linear.x = float(v_tool[0])
+        cmd.linear.y = float(v_tool[1])
+        cmd.linear.z = float(v_tool[2])
+        cmd.angular.x = float(w_tool[0])
+        cmd.angular.y = float(w_tool[1])
+        cmd.angular.z = float(w_tool[2])
 
         self.vel_pub.publish(cmd)
 
