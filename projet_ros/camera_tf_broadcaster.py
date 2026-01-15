@@ -37,9 +37,9 @@ class CameraStaticTF(Node):
 
         # Déclaration des paramètres (avec valeurs par défaut)
         # Tu pourras les modifier via le launch file ou un yaml
-        self.declare_parameter('x', 0.05)
+        self.declare_parameter('x', -0.05)
         self.declare_parameter('y', 0.0)
-        self.declare_parameter('z', 0.03)
+        self.declare_parameter('z', 0.01)
         self.declare_parameter('roll', 0.0)
         self.declare_parameter('pitch', 0.0)
         self.declare_parameter('yaw', 0.0)
