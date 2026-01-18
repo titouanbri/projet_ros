@@ -13,6 +13,7 @@ from cv_bridge import CvBridge
 class WebcamDualPublisher(Node):
     def __init__(self):
         super().__init__('webcam_dual_publisher')
+        self.debug = True
 
         # RAW image publisher
         self.raw_pub = self.create_publisher(
@@ -25,6 +26,12 @@ class WebcamDualPublisher(Node):
         self.compressed_pub = self.create_publisher(
             CompressedImage,
             '/webcam/image/compressed',
+            10
+        )
+
+        self.debug_pub = self.create_publisher(
+            Image,
+            '/detection_results',
             10
         )
 
@@ -51,6 +58,8 @@ class WebcamDualPublisher(Node):
         raw_msg.header.stamp = stamp
         raw_msg.header.frame_id = 'webcam'
         self.raw_pub.publish(raw_msg)
+        if self.debug:
+            self.debug_pub.publish(raw_msg)
 
         # -------- JPEG COMPRESSED --------
         success, encoded = cv2.imencode(

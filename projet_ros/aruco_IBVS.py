@@ -18,40 +18,6 @@ def hat_to_twist(xi_hat : np.ndarray):
     xi = np.concatenate((w.flatten(),t.flatten())).reshape(6,)
     return xi
 
-def RPY_to_R(roll, pitch, yaw):
-    """
-    Converts roll, pitch, yaw angles to a 3x3 rotation matrix.
-    Angles are in radians.
-
-    Roll  = rotation about X
-    Pitch = rotation about Y
-    Yaw   = rotation about Z
-
-    ZYX order (yaw-pitch-roll)
-    """
-
-    Rx = np.array([
-        [1, 0, 0],
-        [0, np.cos(roll), -np.sin(roll)],
-        [0, np.sin(roll),  np.cos(roll)]
-    ])
-
-    Ry = np.array([
-        [ np.cos(pitch), 0, np.sin(pitch)],
-        [ 0,             1, 0            ],
-        [-np.sin(pitch), 0, np.cos(pitch)]
-    ])
-
-    Rz = np.array([
-        [np.cos(yaw), -np.sin(yaw), 0],
-        [np.sin(yaw),  np.cos(yaw), 0],
-        [0,            0,           1]
-    ])
-
-    # ZYX order: yaw → pitch → roll
-    R = Rz @ Ry @ Rx
-    return R
-
 def quaternion_to_rotation_matrix(qx, qy, qz, qw):
     """Convert quaternion to 3x3 rotation matrix."""
     # Normalize quaternion
@@ -100,6 +66,8 @@ class CamPoseController(Node):
     def __init__(self):
         super().__init__('cam_pose_controller')
 
+        self.cam_tf: TransformStamped = None
+        self.marker_tf: TransformStamped = None
         self.ee_tf: TransformStamped = None
 
         self.dt = 1e-2
@@ -114,7 +82,25 @@ class CamPoseController(Node):
     def timer_cb(self):
         try:
             base = "base_link"
+            camera = "camera_link"
+            marker = "aruco"
             ee = "wrist_3_link"
+
+            if self.tf_buffer.can_transform(base, camera, rclpy.time.Time()):
+                self.cam_tf = self.tf_buffer.lookup_transform(
+                    base,
+                    camera,
+                    rclpy.time.Time(),
+                    timeout=rclpy.duration.Duration(seconds=self.dt),
+                )
+
+            if self.tf_buffer.can_transform(base, marker, rclpy.time.Time()):
+                self.marker_tf = self.tf_buffer.lookup_transform(
+                    base,
+                    marker,
+                    rclpy.time.Time(),
+                    timeout=rclpy.duration.Duration(seconds=self.dt),
+                )
 
             if self.tf_buffer.can_transform(base, ee, rclpy.time.Time()):
                 self.ee_tf = self.tf_buffer.lookup_transform(
@@ -141,12 +127,32 @@ class CamPoseController(Node):
 
     def compute_twist(self):
         try:
-            if self.ee_tf is not None:
-                Kp = 1
+            if self.marker_tf is not None and self.cam_tf is not None and self.ee_tf is not None:
+                Kp = 0.1
 
-                
+                #----------Calculating cam pose wrt base_link--------------------
+                t_cam = self.cam_tf.transform.translation
+                x_cam = np.array([t_cam.x, t_cam.y, t_cam.z])
+                q = self.cam_tf.transform.rotation
+                quat = [q.x, q.y, q.z, q.w]
+                R_cam = quaternion_to_rotation_matrix(q.x, q.y, q.z, q.w)[:3, :3]
 
+                H_c = np.block([[R_cam, x_cam.reshape(3,1)],
+                                [np.zeros((1,3)), 1]]) #wrt world
+                #----------Calculating cam pose wrt base_link--------------------
 
+                #----------Calculating ARUCO marker pose wrt base_link--------------------
+                t_marker = self.marker_tf.transform.translation
+                x_marker = np.array([t_marker.x, t_marker.y, t_marker.z])
+                q = self.marker_tf.transform.rotation
+                quat = [q.x, q.y, q.z, q.w]
+                R_marker = quaternion_to_rotation_matrix(q.x, q.y, q.z, q.w)[:3, :3]
+
+                H_aruco_wrt_world = np.block([[R_marker, x_marker.reshape(3,1)],
+                                [np.zeros((1,3)), 1]])
+                #----------Calculating ARUCO marker pose wrt base_link--------------------
+
+                #----------Calculating EE pose wrt base_link--------------------
                 q = self.ee_tf.transform.rotation
                 quat = [q.x, q.y, q.z, q.w]
                 R_ee = quaternion_to_rotation_matrix(q.x, q.y, q.z, q.w)[:3, :3]
@@ -157,18 +163,31 @@ class CamPoseController(Node):
                 H_ee = np.block([[R_ee, x_ee.reshape(3,1)],
                                 [np.zeros((1,3)), 1]])
                 
+                #----------Calculating EE pose wrt base_link--------------------
                 
-                t_d = np.array([0.0,0.22315,0.69395])
-                H_d = np.eye(4); H_d[:3,3] = t_d;H_d[:3,:3] = R_ee #RPY_to_R(-np.pi/2,0,0) #wrt world
 
+                
+                Hd_wrt_aruco = np.eye(4)
+                Hd_wrt_aruco[:3,3] = np.array([0,0,0.03])
 
-                err_hat = logm(np.linalg.inv(H_ee) @ H_d)
+                
+                
+                H_d_wrt_world = H_aruco_wrt_world @ Hd_wrt_aruco
+
+                err_hat = logm(np.linalg.inv(H_c) @ H_d_wrt_world)
                 xi_err = hat_to_twist(err_hat) #wrt current cam pose
 
+                
+                
 
-                ctrl = Kp * xi_err #this is a w-v convention twist......
+
+                ctrl = Kp * adj(H_ee) @ xi_err
+
+
 
                 twist_out = Twist()
+                
+
                 twist_out.linear.x = float(ctrl[3])
                 twist_out.linear.y = float(ctrl[4])
                 twist_out.linear.z = float(ctrl[5])
@@ -176,11 +195,8 @@ class CamPoseController(Node):
                 twist_out.angular.y = float(ctrl[1]) 
                 twist_out.angular.z = float(ctrl[2]) 
 
-                print(ctrl)
 
                 self.cmd_pub.publish(twist_out)
-
-                
             else:
                 self.get_logger().info(
                     "TFs not initialized yet", throttle_duration_sec=5.0
