@@ -40,7 +40,7 @@ class CameraStaticTF(Node):
         self.declare_parameter('y', 0.0)
         self.declare_parameter('z', 0.01)
         self.declare_parameter('roll', 0.0)
-        self.declare_parameter('pitch', 0.0)
+        self.declare_parameter('pitch', -1.57)
         self.declare_parameter('yaw', 0.0)
         self.declare_parameter('parent_frame', 'tool0')
         self.declare_parameter('child_frame', 'camera_link')
