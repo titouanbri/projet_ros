@@ -13,7 +13,7 @@ class PBVSNode(Node):
         super().__init__('pbvs_node')
 
         self.lmbda = 1.0        # Gain proportionnel (lambda)
-        self.dist_target = 0.3  # Distance désirée entre le marker et la cam
+        self.dist_target = 0.1  # Distance désirée entre le marker et la cam
         
         self.target_frame = 'aruco_0'
         self.camera_frame = 'camera_link' 
@@ -94,8 +94,8 @@ class PBVSNode(Node):
         rot_vec = r_obj.as_rotvec()   #rotation vector (angle-axis)
 
         # Loi de commande PBVS dans repère caméra
-        v_cam = -self.lmbda * (R_mat.T @ t_vec)*(-1)    #ajout du -1 car le robot par aà l'envers ????
-        w_cam = -self.lmbda * rot_vec*(-1)
+        v_cam = -self.lmbda * (R_mat.T @ t_vec)
+        w_cam = -self.lmbda * rot_vec
 
         # passage de Caméra -> Tool via TF
         try:

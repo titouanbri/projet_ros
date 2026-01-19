@@ -35,8 +35,7 @@ class CameraStaticTF(Node):
 
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
 
-        # Déclaration des paramètres (avec valeurs par défaut)
-        # Tu pourras les modifier via le launch file ou un yaml
+        #paramètres (avec valeurs par défaut)
         self.declare_parameter('x', -0.05)
         self.declare_parameter('y', 0.0)
         self.declare_parameter('z', 0.01)
@@ -71,8 +70,6 @@ class CameraStaticTF(Node):
         t.transform.translation.y = y
         t.transform.translation.z = z
 
-        # Conversion Euler (Roll/Pitch/Yaw) vers Quaternion
-        # Note: L'ordre standard ROS est souvent sxyz, ici on applique une conversion standard
         q = quaternion_from_euler(roll, pitch, yaw)
         
         t.transform.rotation.x = q[0]

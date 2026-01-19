@@ -30,13 +30,13 @@ class ArucoTrackingNode(Node):
         self.camera_matrix = None
         self.dist_coeffs = None
         
-        # --- ROS ---
+
         self.br = CvBridge()
         
         # Initialisation du Broadcaster TF
         self.tf_broadcaster = TransformBroadcaster(self)
         
-        # Abonnements
+        #subscriptions
         self.subscription = self.create_subscription(
             Image,
             '/camera/camera/color/image_raw',  
