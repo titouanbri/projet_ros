@@ -41,7 +41,7 @@ class CamPoseController(Node):
         try:
             base_frame = "base_link"
             ee_frame = "wrist_3_link"
-            target_frame = "desired_pose_link"  # TF representing desired pose
+            target_frame = "desired_pose"  # TF representing desired pose
 
             if self.tf_buffer.can_transform(base_frame, ee_frame, rclpy.time.Time()) and \
                self.tf_buffer.can_transform(base_frame, target_frame, rclpy.time.Time()):
@@ -61,7 +61,7 @@ class CamPoseController(Node):
             self.get_logger().warn(f"Problem getting TFs: {e}", throttle_duration_sec=5.0)
 
     def compute_twist(self, ee_tf: TransformStamped, target_tf: TransformStamped):
-        Kp = 1.0
+        Kp = 0.1
 
         # --- Current end-effector pose ---
         t_ee = ee_tf.transform.translation
@@ -84,6 +84,10 @@ class CamPoseController(Node):
             target_tf.transform.rotation.w
         )
         x_d = np.array([t_d.x, t_d.y, t_d.z])
+
+        #x_d = np.array([0.3,0.3,0.3])
+        #R_d = RPY_to_R(-np.pi/2,0,0)
+
         H_d = np.block([[R_d, x_d.reshape(3,1)],
                         [np.zeros((1,3)), 1]])
 

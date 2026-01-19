@@ -70,6 +70,40 @@ def tf_from_pose(H, parent_frame, child_frame, stamp):
     tf_msg.transform.rotation.w = qw
     return tf_msg
 
+def RPY_to_R(roll, pitch, yaw):
+    """
+    Converts roll, pitch, yaw angles to a 3x3 rotation matrix.
+    Angles are in radians.
+
+    Roll  = rotation about X
+    Pitch = rotation about Y
+    Yaw   = rotation about Z
+
+    ZYX order (yaw-pitch-roll)
+    """
+
+    Rx = np.array([
+        [1, 0, 0],
+        [0, np.cos(roll), -np.sin(roll)],
+        [0, np.sin(roll),  np.cos(roll)]
+    ])
+
+    Ry = np.array([
+        [ np.cos(pitch), 0, np.sin(pitch)],
+        [ 0,             1, 0            ],
+        [-np.sin(pitch), 0, np.cos(pitch)]
+    ])
+
+    Rz = np.array([
+        [np.cos(yaw), -np.sin(yaw), 0],
+        [np.sin(yaw),  np.cos(yaw), 0],
+        [0,            0,           1]
+    ])
+
+    # ZYX order: yaw → pitch → roll
+    R = Rz @ Ry @ Rx
+    return R
+
 class ArucoDesiredPoseNode(Node):
     def __init__(self):
         super().__init__('aruco_desired_pose_node')
@@ -94,7 +128,8 @@ class ArucoDesiredPoseNode(Node):
 
                 # Define desired pose wrt ARUCO (e.g., 5cm above)
                 H_desired = np.eye(4)
-                H_desired[:3,3] = np.array([0,0,0.15])  # 5cm offset along marker z
+                H_desired[:3,:3] = RPY_to_R(np.pi,0,np.pi/2)
+                H_desired[:3,3] = np.array([0,0,0.25])  # 5cm offset along marker z
 
                 t_marker = self.marker_tf.transform.translation
                 q_marker = self.marker_tf.transform.rotation
