@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist, TransformStamped
+from geometry_msgs.msg import Twist, TransformStamped, PointStamped
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
@@ -12,13 +12,15 @@ class PBVSNode(Node):
     def __init__(self):
         super().__init__('pbvs_node')
 
+        self.dlt_estimation = None
 
         self.init_dlt=True   #defiine if we need to init the dlt
+        self.init_duration = 50
 
         self.lmbda = 1.0        # Gain proportionnel (lambda)
         self.dist_target = 0.1  # Distance désirée entre le marker et la cam
         
-        self.target_frame = 'aruco_0'
+        self.target_frame = 'marker'
         # self.camera_frame = 'camera_link' 
         self.camera_frame = 'camera_color_optical_frame'
         self.tool_frame = 'tool0'
@@ -40,11 +42,13 @@ class PBVSNode(Node):
 
         # Publisher vitesse
         self.vel_pub = self.create_publisher(Twist, '/ee_velocity_cmd', 10)
-        
+        self.dlt_estimation = self.create_subscription(PointStamped,'/dlt/triangulated_point', 10)
         # Timer de contrôle 
         self.timer = self.create_timer(0.1, self.control_loop)
         
         self.get_logger().info("node launched")
+
+    def dlt_estimation_callback(self, msg):
 
     def transform_to_matrix(self, t_stamped):
         #transform a TF in a matrix 4x4
@@ -63,7 +67,16 @@ class PBVSNode(Node):
             return v * (max_val / norm)  #keep the direction
         return v
 
-    def control_loop(self):       
+    def control_loop(self):   
+        i=0
+        if self.init_dlt and i < self.init_duration:
+            msg = Twist()
+            msg.linear.x = 0.05
+            self.vel_pub.publish(msg)
+            i+=1
+            return
+        self.init_dlt=False
+
         try:
             # marker/cam TF
             t_cam_marker = self.tf_buffer.lookup_transform(
@@ -83,6 +96,7 @@ class PBVSNode(Node):
                 return
         except TransformException as ex:
             self.vel_pub.publish(Twist()) # Stop
+            self.init_dlt=True
             return
 
         # Convert to matrix 

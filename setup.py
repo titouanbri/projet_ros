@@ -29,8 +29,6 @@ setup(
     entry_points={
         'console_scripts': [
             'puck_detector = projet_ros.puck_detector:main',
-            'phone_detector = projet_ros.phone_detector:main',
-            'kdl_node = projet_ros.kdl_node:main',
             'video_feed_gui = projet_ros.video_feed:main',
             'webcam_publisher = projet_ros.webcam_publisher:main',
             'aruko_detection = projet_ros.aruko_detection:main',
@@ -38,7 +36,7 @@ setup(
             'ivk = projet_ros.ivk:main',
             'pbvs_node = projet_ros.pbvs_node:main',
             'camera_tf_broadcaster = projet_ros.camera_tf_broadcaster:main',
-            'pose_control = projet_ros.pose_control:main',
+            'triangulate_dlt = projet_ros.triangulate_dlt:main',
 
         ],
     },
