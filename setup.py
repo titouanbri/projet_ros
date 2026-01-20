@@ -37,6 +37,7 @@ setup(
             'pbvs_node = projet_ros.pbvs_node:main',
             'camera_tf_broadcaster = projet_ros.camera_tf_broadcaster:main',
             'triangulate_dlt = projet_ros.triangulate_dlt:main',
+            'test_pbvs = projet_ros.test_pbvs:main',
 
         ],
     },

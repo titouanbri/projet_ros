@@ -7,12 +7,16 @@ from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from scipy.spatial.transform import Rotation as R
 import numpy as np
+from tf2_ros import TransformBroadcaster
+
 
 class PBVSNode(Node):
     def __init__(self):
         super().__init__('pbvs_node')
 
         self.dlt_estimation = None
+        self.tf_broadcaster = TransformBroadcaster(self)
+
 
         self.init_dlt=True   #defiine if we need to init the dlt
         self.init_duration = 50
@@ -20,7 +24,7 @@ class PBVSNode(Node):
         self.lmbda = 1.0        # Gain proportionnel (lambda)
         self.dist_target = 0.1  # Distance désirée entre le marker et la cam
         
-        self.target_frame = 'marker'
+        self.target_frame = 'puck'
         # self.camera_frame = 'camera_link' 
         self.camera_frame = 'camera_color_optical_frame'
         self.tool_frame = 'tool0'
@@ -42,13 +46,12 @@ class PBVSNode(Node):
 
         # Publisher vitesse
         self.vel_pub = self.create_publisher(Twist, '/ee_velocity_cmd', 10)
-        self.dlt_estimation = self.create_subscription(PointStamped,'/dlt/triangulated_point', 10)
         # Timer de contrôle 
         self.timer = self.create_timer(0.1, self.control_loop)
         
         self.get_logger().info("node launched")
 
-    def dlt_estimation_callback(self, msg):
+    
 
     def transform_to_matrix(self, t_stamped):
         #transform a TF in a matrix 4x4
