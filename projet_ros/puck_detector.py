@@ -4,14 +4,13 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, Polygon, Point32  # Ajout de Polygon et Point32
 from cv_bridge import CvBridge
 import cv2
 import time
 import numpy as np
 
 from ultralytics import YOLO
-
 
 class DetectionNode(Node):
     def __init__(self):
@@ -20,13 +19,13 @@ class DetectionNode(Node):
         self.get_logger().info("Detection Node initialized")
 
         # --- YOLO ---
+        # Assurez-vous que le modèle existe ou utilisez 'yolov8n.pt' pour tester
         self.model = YOLO("models/puck_detector_n.pt")
 
         # --- ROS ---
         self.br = CvBridge()
         self.subscription = self.create_subscription(
             Image,
-            #'/camera/camera/color/image_raw', #/webcam/image/raw
             '/image_raw',
             self.image_callback,
             10
@@ -44,9 +43,17 @@ class DetectionNode(Node):
             10
         )
 
+        # Nouveau publisher pour les 4 coins
+        self.corners_pub = self.create_publisher(
+            Polygon,
+            '/detected_corners',
+            10
+        )
+
         # --- Tracking state ---
         self.active_track_id = None
         self.prev_center = None
+        self.prev_wh = None          # Stocke la largeur/hauteur (width, height)
         self.prev_velocity = np.zeros(2)
         self.last_seen_time = None
         self.last_time = None
@@ -54,20 +61,24 @@ class DetectionNode(Node):
         # --- Parameters (industry typical) ---
         self.alpha = 0.65                # EMA smoothing
         self.hold_duration = 0.5         # seconds
-        self.conf_threshold = 0.4        # lower for fast motion
-        self.max_jump_px = 150.0         # motion gate (pixels)
+        self.conf_threshold = 0.4
+        self.max_jump_px = 150.0
 
     def image_callback(self, msg):
         now = time.time()
 
         # ROS → OpenCV
-        cv_image = self.br.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        try:
+            cv_image = self.br.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        except Exception as e:
+            self.get_logger().error(f"Erreur conversion image: {e}")
+            return
 
         # --- YOLO tracking ---
         results = self.model.track(
             source=cv_image,
             persist=True,
-            classes=[0], #scissors, very good
+            classes=[0], 
             conf=self.conf_threshold,
             verbose=False
         )
@@ -77,6 +88,7 @@ class DetectionNode(Node):
 
         detection_found = False
         current_center = None
+        current_wh = None  # Current width/height
 
         # --- Prediction (constant velocity model) ---
         if self.prev_center is not None and self.last_time is not None:
@@ -96,27 +108,35 @@ class DetectionNode(Node):
                 x1, y1, x2, y2 = xyxy[i]
                 cx = (x1 + x2) / 2.0
                 cy = (y1 + y2) / 2.0
+                w = x2 - x1
+                h = y2 - y1
                 center = np.array([cx, cy])
+                wh = np.array([w, h])
 
                 if predicted_center is not None:
                     dist = np.linalg.norm(center - predicted_center)
                 else:
                     dist = 0.0
 
-                candidates.append((i, center, dist, confs[i], track_ids[i]))
+                # On stocke aussi les dimensions (wh) dans le candidat
+                candidates.append((i, center, dist, confs[i], track_ids[i], wh))
 
             # --- Choose best candidate ---
-            candidates.sort(key=lambda x: (x[2], -x[3]))  # distance first, then confidence
+            candidates.sort(key=lambda x: (x[2], -x[3]))  # distance d'abord, puis confiance
             best = candidates[0]
 
             if predicted_center is None or best[2] < self.max_jump_px:
                 current_center = best[1]
                 self.active_track_id = best[4]
+                current_wh = best[5] # Récupérer largeur/hauteur
                 detection_found = True
 
         # --- Temporal logic ---
         if detection_found:
             self.last_seen_time = now
+            
+            # Mise à jour des dimensions (on pourrait lisser aussi, mais brut c'est souvent ok)
+            self.prev_wh = current_wh 
 
             if self.prev_center is None:
                 smooth_center = current_center
@@ -141,32 +161,57 @@ class DetectionNode(Node):
             ):
                 smooth_center = predicted_center
                 self.prev_center = smooth_center
+                # On garde le self.prev_wh précédent
             else:
                 self.active_track_id = None
                 self.prev_center = None
+                self.prev_wh = None
                 self.prev_velocity = np.zeros(2)
 
         self.last_time = now
 
-        # --- Publish center if available ---
+        # --- Visualisation ---
+        vis = res.plot() # Dessine la boite YOLO brute
+
+        # --- Publication ---
         if self.prev_center is not None:
+            # 1. Publier le centre
             point = Point()
             point.x = float(self.prev_center[0])
             point.y = float(self.prev_center[1])
             point.z = 0.0
             self.center_pub.publish(point)
 
-        # --- Always publish visualization ---
-        vis = res.plot()
+            # Dessin du centre lissé
+            cv2.circle(vis, (int(self.prev_center[0]), int(self.prev_center[1])), 6, (0, 0, 255), -1)
 
-        if self.prev_center is not None:
-            cv2.circle(
-                vis,
-                (int(self.prev_center[0]), int(self.prev_center[1])),
-                6,
-                (0, 0, 255),
-                -1
-            )
+            # 2. Calculer et publier les 4 coins (Basé sur le centre lissé)
+            if self.prev_wh is not None:
+                cx, cy = self.prev_center
+                w, h = self.prev_wh
+                
+                # Calcul des coins : Haut-Gauche, Haut-Droit, Bas-Droit, Bas-Gauche
+                # Ordre standard pour les polygones
+                corners = [
+                    (cx - w/2, cy - h/2), # TL
+                    (cx + w/2, cy - h/2), # TR
+                    (cx + w/2, cy + h/2), # BR
+                    (cx - w/2, cy + h/2)  # BL
+                ]
+
+                poly_msg = Polygon()
+                for (x, y) in corners:
+                    p = Point32()
+                    p.x = float(x)
+                    p.y = float(y)
+                    p.z = 0.0
+                    poly_msg.points.append(p)
+                
+                self.corners_pub.publish(poly_msg)
+
+                # Visualisation optionnelle des coins calculés (points verts)
+                for (x, y) in corners:
+                    cv2.circle(vis, (int(x), int(y)), 4, (0, 255, 0), -1)
 
         out_msg = self.br.cv2_to_imgmsg(vis, encoding='bgr8')
         self.image_pub.publish(out_msg)
