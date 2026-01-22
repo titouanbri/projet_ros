@@ -26,7 +26,8 @@ class DetectionNode(Node):
         self.br = CvBridge()
         self.subscription = self.create_subscription(
             Image,
-            '/camera/camera/color/image_raw', #/webcam/image/raw
+            #'/camera/camera/color/image_raw', #/webcam/image/raw
+            '/image_raw',
             self.image_callback,
             10
         )
