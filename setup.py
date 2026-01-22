@@ -38,6 +38,7 @@ setup(
             'pbvs_node = projet_ros.pbvs_node:main',
             'camera_tf_broadcaster = projet_ros.camera_tf_broadcaster:main',
             'test_pbvs = projet_ros.test_pbvs:main',
+            'PnP_node = projet_ros.PnP_node:main',
 
         ],
     },

@@ -61,7 +61,7 @@ class DetectionNode(Node):
         # --- Parameters (industry typical) ---
         self.alpha = 0.65                # EMA smoothing
         self.hold_duration = 0.5         # seconds
-        self.conf_threshold = 0.4
+        self.conf_threshold = 0.8
         self.max_jump_px = 150.0
 
     def image_callback(self, msg):
