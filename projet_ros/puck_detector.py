@@ -4,129 +4,180 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from geometry_msgs.msg import Point  # <--- NOUVEAU : Pour publier (u, v)
-from cv_bridge import CvBridge, CvBridgeError
+from geometry_msgs.msg import Point
+from cv_bridge import CvBridge
 import cv2
+import time
 import numpy as np
 
-class CircularityDebugNode(Node):
+from ultralytics import YOLO
+
+
+class DetectionNode(Node):
     def __init__(self):
-        super().__init__('circularity_debug_node')
+        super().__init__('detection_node')
+
+        self.get_logger().info("Detection Node initialized")
+
+        # --- YOLO ---
+        self.model = YOLO("models/puck_detector_n.pt")
+
+        # --- ROS ---
         self.br = CvBridge()
-        
-        # Subscribers
         self.subscription = self.create_subscription(
-            Image, 
-            '/camera/camera/color/image_raw', 
-            self.image_callback, 
+            Image,
+            '/camera/camera/color/image_raw', #/webcam/image/raw
+            self.image_callback,
             10
         )
-        
-        # Publishers
-        self.debug_publisher_ = self.create_publisher(Image, '/puck/debug_view', 10)
-        self.pos_publisher_ = self.create_publisher(Point, '/puck/position', 10) # <--- NOUVEAU
-        
-        # --- REGLAGES ---
-        # 1. Couleur (HSV)
-        self.lower_white = np.array([0, 0, 120])   
-        self.upper_white = np.array([180, 50, 255]) 
 
-        # 2. Taille (en Pixels)
-        self.min_area = 100    
-        self.max_area = 50000  
+        self.image_pub = self.create_publisher(
+            Image,
+            '/detection_results',
+            10
+        )
 
-        # 3. Forme (Seuil de rondeur)
-        self.min_circularity = 0.8 
+        self.center_pub = self.create_publisher(
+            Point,
+            '/detected_center',
+            10
+        )
+
+        # --- Tracking state ---
+        self.active_track_id = None
+        self.prev_center = None
+        self.prev_velocity = np.zeros(2)
+        self.last_seen_time = None
+        self.last_time = None
+
+        # --- Parameters (industry typical) ---
+        self.alpha = 0.65                # EMA smoothing
+        self.hold_duration = 0.5         # seconds
+        self.conf_threshold = 0.4        # lower for fast motion
+        self.max_jump_px = 150.0         # motion gate (pixels)
 
     def image_callback(self, msg):
-        try:
-            cv_image = self.br.imgmsg_to_cv2(msg, "bgr8")
-        except CvBridgeError: return
+        now = time.time()
 
-        # Étape 1 : Masque Couleur
-        hsv = cv2.cvtColor(cv_image, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, self.lower_white, self.upper_white)
+        # ROS → OpenCV
+        cv_image = self.br.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
-        # Étape 2 : Nettoyage
-        kernel = np.ones((5, 5), np.uint8)
-        mask = cv2.erode(mask, kernel, iterations=1) 
-        mask = cv2.dilate(mask, kernel, iterations=1)
+        # --- YOLO tracking ---
+        results = self.model.track(
+            source=cv_image,
+            persist=True,
+            classes=[0], #scissors, very good
+            conf=self.conf_threshold,
+            verbose=False
+        )
 
-        # Étape 3 : Analyse des formes
-        contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Variables pour trouver le meilleur candidat (le plus gros palet valide)
-        best_cnt = None
-        max_valid_area = 0
-        best_center = None
+        res = results[0]
+        boxes = res.boxes
 
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            
-            # Filtre de taille
-            if area < self.min_area or area > self.max_area:
-                continue
+        detection_found = False
+        current_center = None
 
-            # Filtre de circularité
-            perimeter = cv2.arcLength(cnt, True)
-            if perimeter == 0: continue
-            circularity = 4 * np.pi * (area / (perimeter * perimeter))
+        # --- Prediction (constant velocity model) ---
+        if self.prev_center is not None and self.last_time is not None:
+            dt = max(now - self.last_time, 1e-3)
+            predicted_center = self.prev_center + self.prev_velocity * dt
+        else:
+            predicted_center = None
 
-            x, y, w, h = cv2.boundingRect(cnt)
+        if boxes is not None and len(boxes) > 0 and boxes.id is not None:
+            track_ids = boxes.id.cpu().numpy().astype(int)
+            xyxy = boxes.xyxy.cpu().numpy()
+            confs = boxes.conf.cpu().numpy()
 
-            # --- DESSIN ET LOGIQUE ---
-            if circularity > self.min_circularity:
-                # C'est un palet VALIDE
-                color = (0, 255, 0) # Vert
-                
-                # Calcul des Moments pour trouver le centre exact (u, v)
-                M = cv2.moments(cnt)
-                if M["m00"] != 0:
-                    cX = int(M["m10"] / M["m00"])
-                    cY = int(M["m01"] / M["m00"])
+            candidates = []
+
+            for i in range(len(track_ids)):
+                x1, y1, x2, y2 = xyxy[i]
+                cx = (x1 + x2) / 2.0
+                cy = (y1 + y2) / 2.0
+                center = np.array([cx, cy])
+
+                if predicted_center is not None:
+                    dist = np.linalg.norm(center - predicted_center)
                 else:
-                    cX, cY = 0, 0
+                    dist = 0.0
 
-                label = f"PALET ({circularity:.2f})"
-                
-                # On garde en mémoire si c'est le plus gros qu'on ait vu dans cette image
-                if area > max_valid_area:
-                    max_valid_area = area
-                    best_cnt = cnt
-                    best_center = (cX, cY)
+                candidates.append((i, center, dist, confs[i], track_ids[i]))
 
+            # --- Choose best candidate ---
+            candidates.sort(key=lambda x: (x[2], -x[3]))  # distance first, then confidence
+            best = candidates[0]
+
+            if predicted_center is None or best[2] < self.max_jump_px:
+                current_center = best[1]
+                self.active_track_id = best[4]
+                detection_found = True
+
+        # --- Temporal logic ---
+        if detection_found:
+            self.last_seen_time = now
+
+            if self.prev_center is None:
+                smooth_center = current_center
+                velocity = np.zeros(2)
             else:
-                # C'est un objet rejeté (pas assez rond)
-                color = (0, 0, 255) # Rouge
-                label = f"NON ({circularity:.2f})"
+                dt = max(now - self.last_time, 1e-3)
+                velocity = (current_center - self.prev_center) / dt
+                smooth_center = (
+                    self.alpha * current_center
+                    + (1.0 - self.alpha) * self.prev_center
+                )
 
-            # Dessin de debug (Contours et Texte)
-            cv2.drawContours(cv_image, [cnt], -1, color, 2)
-            cv2.putText(cv_image, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            self.prev_velocity = velocity
+            self.prev_center = smooth_center
 
-        # --- PUBLICATION DE LA POSITION ---
-        # On ne publie que si on a trouvé au moins un palet valide
-        if best_center is not None:
-            point_msg = Point()
-            point_msg.x = float(best_center[0]) # u (horizontal)
-            point_msg.y = float(best_center[1]) # v (vertical)
-            point_msg.z = 0.0                   # z (non utilisé en 2D pixel)
-            self.pos_publisher_.publish(point_msg)
-    
-            # Dessiner une croix sur le palet élu "Cible"
-            cv2.drawMarker(cv_image, best_center, (255, 0, 0), cv2.MARKER_CROSS, 20, 3)
-            cv2.putText(cv_image, f"CIBLE {best_center}", (best_center[0]+10, best_center[1]), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+        else:
+            # Hold & predict
+            if (
+                self.last_seen_time is not None and
+                (now - self.last_seen_time) < self.hold_duration and
+                predicted_center is not None
+            ):
+                smooth_center = predicted_center
+                self.prev_center = smooth_center
+            else:
+                self.active_track_id = None
+                self.prev_center = None
+                self.prev_velocity = np.zeros(2)
 
-        # Publication de l'image de debug
-        self.debug_publisher_.publish(self.br.cv2_to_imgmsg(cv_image, "bgr8"))
+        self.last_time = now
+
+        # --- Publish center if available ---
+        if self.prev_center is not None:
+            point = Point()
+            point.x = float(self.prev_center[0])
+            point.y = float(self.prev_center[1])
+            point.z = 0.0
+            self.center_pub.publish(point)
+
+        # --- Always publish visualization ---
+        vis = res.plot()
+
+        if self.prev_center is not None:
+            cv2.circle(
+                vis,
+                (int(self.prev_center[0]), int(self.prev_center[1])),
+                6,
+                (0, 0, 255),
+                -1
+            )
+
+        out_msg = self.br.cv2_to_imgmsg(vis, encoding='bgr8')
+        self.image_pub.publish(out_msg)
+
 
 def main(args=None):
     rclpy.init(args=args)
-    node = CircularityDebugNode()
+    node = DetectionNode()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()
