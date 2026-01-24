@@ -16,19 +16,15 @@ class PnPNode(Node):
 
         self.get_logger().info("PnP Node initialized (Puck 3D Pose)")
 
-        # --- PARAMÈTRES OBJET ---
+        #dimension de l'objet
         self.target_width = 0.054
         self.target_height = 0.054
 
-        # --- PARAMÈTRES CAMÉRA PAR DÉFAUT ---
-        # Si aucune info caméra n'est reçue, on utilise ces valeurs.
-        # Exemple pour une résolution 640x480 avec un FOV standard (~60°)
-        # fx ~ width, fy ~ width, cx = width/2, cy = height/2
-        
-        # Largeur/Hauteur supposées de l'image (à ajuster si vous utilisez du 1280x720, etc.)
+
+        #parametres cam si cam du pc
         img_w = 640.0
         img_h = 480.0
-        fx = img_w  # approximation focale
+        fx = img_w  
         fy = img_h
         cx = img_w / 2.0
         cy = img_h / 2.0
@@ -44,13 +40,12 @@ class PnPNode(Node):
         
         self.get_logger().warn(f"Calibration par défaut chargée (Intrinsics: {fx}x{fy}). En attente de /camera_info pour affiner...")
 
-        # --- INIT TF BROADCASTER ---
         self.tf_broadcaster = TransformBroadcaster(self)
 
-        # --- SUBSCRIBERS ---
+        #Sub
         self.info_sub = self.create_subscription(
             CameraInfo,
-            '/camera_info', # Vérifiez que ce topic est correct
+            '/camera_info', 
             self.info_callback,
             10
         )
@@ -62,12 +57,11 @@ class PnPNode(Node):
             10
         )
 
-        # --- PUBLISHERS ---
+        #Pub
         self.pose_pub = self.create_publisher(PoseStamped, '/puck/pose', 10)
 
     def info_callback(self, msg):
-        # On ne met à jour que si on n'a pas encore reçu de vraie calibration
-        # ou si vous voulez permettre la mise à jour en continu, retirez la condition 'if not self...'
+        # on prend les infos de la cam
         if np.linalg.norm(np.array(msg.k).reshape((3, 3))) > 0.1 :
             self.camera_matrix = np.array(msg.k).reshape((3, 3))
             self.dist_coeffs = np.array(msg.d)
@@ -77,9 +71,7 @@ class PnPNode(Node):
             print("Distortion Coefficients:\n", self.dist_coeffs)
 
     def rvec_to_quaternion(self, rvec):
-        """
-        Convertit un vecteur de rotation (Rodrigues) en Quaternion ROS [x, y, z, w]
-        """
+
         R, _ = cv2.Rodrigues(rvec)
         
         tr = np.trace(R)
@@ -113,20 +105,18 @@ class PnPNode(Node):
         return q
 
     def corners_callback(self, msg):
-        # NOTE: On a supprimé le check "if self.camera_matrix is None" car on a des valeurs par défaut.
 
-        # 1. Extraction des points 2D
         if len(msg.points) != 4:
             return
 
         image_points = np.array([
-            [msg.points[0].x, msg.points[0].y], # TL
-            [msg.points[1].x, msg.points[1].y], # TR
-            [msg.points[2].x, msg.points[2].y], # BR
-            [msg.points[3].x, msg.points[3].y]  # BL
+            [msg.points[0].x, msg.points[0].y], 
+            [msg.points[1].x, msg.points[1].y], 
+            [msg.points[2].x, msg.points[2].y], 
+            [msg.points[3].x, msg.points[3].y] 
         ], dtype=np.float32)
 
-        # 2. Définition des points 3D de l'objet
+        # definition des point del'objet 
         w = self.target_width
         h = self.target_height
         
@@ -137,8 +127,7 @@ class PnPNode(Node):
             [-w / 2.0,  h / 2.0, 0.0]
         ], dtype=np.float32)
 
-        # 3. Résolution PnP
-        # Si on utilise les valeurs par défaut, la précision Z (profondeur) sera approximative
+        # librairie OpenCV pour le PnP
         success, rvec, tvec = cv2.solvePnP(
             object_points, 
             image_points, 
@@ -154,7 +143,7 @@ class PnPNode(Node):
 
             q = self.rvec_to_quaternion(rvec)
 
-            # --- 1. Publication PoseStamped ---
+            #Publication PoseStamped
             pose_msg = PoseStamped()
             pose_msg.header.stamp = self.get_clock().now().to_msg()
             # pose_msg.header.frame_id = "camera_color_optical_frame"
@@ -172,7 +161,7 @@ class PnPNode(Node):
 
             self.pose_pub.publish(pose_msg)
 
-            # --- 2. Publication TF ---
+            # Publication TF
             t = TransformStamped()
             t.header.stamp = pose_msg.header.stamp
             t.header.frame_id = pose_msg.header.frame_id
