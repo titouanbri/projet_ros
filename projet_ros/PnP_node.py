@@ -157,7 +157,9 @@ class PnPNode(Node):
             # --- 1. Publication PoseStamped ---
             pose_msg = PoseStamped()
             pose_msg.header.stamp = self.get_clock().now().to_msg()
-            pose_msg.header.frame_id = "camera_color_optical_frame"
+            # pose_msg.header.frame_id = "camera_color_optical_frame"
+            pose_msg.header.frame_id = "camera_link"
+
             
             pose_msg.pose.position.x = x_trans
             pose_msg.pose.position.y = y_trans

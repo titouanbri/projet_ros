@@ -18,8 +18,8 @@ class PBVSNode(Node):
         self.lmbda = 1.0        # Gain proportionnel (lambda)
         self.dist_target = 0.1  # Distance désirée entre le marker et la cam
         
-        self.target_frame = 'aruco_0'
-        # self.camera_frame = 'camera_link' 
+        # self.target_frame = 'aruco_0'
+        self.target_frame = 'puck_link'
         self.camera_frame = 'camera_color_optical_frame'
         self.tool_frame = 'tool0'
         
