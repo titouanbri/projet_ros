@@ -18,11 +18,10 @@ class DetectionNode(Node):
 
         self.get_logger().info("Detection Node initialized")
 
-        # --- YOLO ---
-        # Assurez-vous que le modèle existe ou utilisez 'yolov8n.pt' pour tester
+        # YOLO
         self.model = YOLO("models/puck_detector_n.pt")
 
-        # --- ROS ---
+        # ROS 
         self.br = CvBridge()
         self.subscription = self.create_subscription(
             Image,
@@ -43,14 +42,13 @@ class DetectionNode(Node):
             10
         )
 
-        # Nouveau publisher pour les 4 coins
         self.corners_pub = self.create_publisher(
             Polygon,
             '/detected_corners',
             10
         )
 
-        # --- Tracking state ---
+        # Tracking state 
         self.active_track_id = None
         self.prev_center = None
         self.prev_wh = None          # Stocke la largeur/hauteur (width, height)
@@ -58,7 +56,7 @@ class DetectionNode(Node):
         self.last_seen_time = None
         self.last_time = None
 
-        # --- Parameters (industry typical) ---
+        # Parameters (industry typical) 
         self.alpha = 0.65                # EMA smoothing
         self.hold_duration = 0.5         # seconds
         self.conf_threshold = 0.8
@@ -74,7 +72,7 @@ class DetectionNode(Node):
             self.get_logger().error(f"Erreur conversion image: {e}")
             return
 
-        # --- YOLO tracking ---
+        # YOLO tracking
         results = self.model.track(
             source=cv_image,
             persist=True,
@@ -90,7 +88,7 @@ class DetectionNode(Node):
         current_center = None
         current_wh = None  # Current width/height
 
-        # --- Prediction (constant velocity model) ---
+        # Prediction (constant velocity model)
         if self.prev_center is not None and self.last_time is not None:
             dt = max(now - self.last_time, 1e-3)
             predicted_center = self.prev_center + self.prev_velocity * dt
@@ -121,7 +119,7 @@ class DetectionNode(Node):
                 # On stocke aussi les dimensions (wh) dans le candidat
                 candidates.append((i, center, dist, confs[i], track_ids[i], wh))
 
-            # --- Choose best candidate ---
+            #Choose best candidate
             candidates.sort(key=lambda x: (x[2], -x[3]))  # distance d'abord, puis confiance
             best = candidates[0]
 
@@ -131,11 +129,10 @@ class DetectionNode(Node):
                 current_wh = best[5] # Récupérer largeur/hauteur
                 detection_found = True
 
-        # --- Temporal logic ---
+        # Temporal logic 
         if detection_found:
             self.last_seen_time = now
             
-            # Mise à jour des dimensions (on pourrait lisser aussi, mais brut c'est souvent ok)
             self.prev_wh = current_wh 
 
             if self.prev_center is None:
@@ -170,10 +167,10 @@ class DetectionNode(Node):
 
         self.last_time = now
 
-        # --- Visualisation ---
+        # Visualisation 
         vis = res.plot() # Dessine la boite YOLO brute
 
-        # --- Publication ---
+        # Publication
         if self.prev_center is not None:
             # 1. Publier le centre
             point = Point()
@@ -185,12 +182,12 @@ class DetectionNode(Node):
             # Dessin du centre lissé
             cv2.circle(vis, (int(self.prev_center[0]), int(self.prev_center[1])), 6, (0, 0, 255), -1)
 
-            # 2. Calculer et publier les 4 coins (Basé sur le centre lissé)
+            #Calculer et publier les 4 coins (Basé sur le centre lissé)
             if self.prev_wh is not None:
                 cx, cy = self.prev_center
                 w, h = self.prev_wh
                 
-                # Calcul des coins : Haut-Gauche, Haut-Droit, Bas-Droit, Bas-Gauche
+                
                 # Ordre standard pour les polygones
                 corners = [
                     (cx - w/2, cy - h/2), # TL
