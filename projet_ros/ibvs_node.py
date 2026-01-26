@@ -21,13 +21,11 @@ class IBVSController(Node):
         self.intrinsics = None # (fx, fy, cx, cy)
         self.latest_depth_img = None
         
-        # Initialize ArUco Detector (New API)
-        self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-        self.aruco_params = cv2.aruco.DetectorParameters()
-        self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
+        # --- FIX: OpenCV 4.5.4 Legacy API Initialization ---
+        self.aruco_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_4X4_50)
+        self.aruco_params = cv2.aruco.DetectorParameters_create()
         
         # --- ROS Setup ---
-        # Ensure these topic names match your RealSense launch output
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.create_subscription(CameraInfo, '/camera/camera/color/camera_info', self.info_cb, 10)
         self.create_subscription(Image, '/camera/camera/color/image_raw', self.image_cb, 10)
@@ -63,10 +61,13 @@ class IBVSController(Node):
             return
 
         cv_img = self.bridge.imgmsg_to_cv2(msg, "bgr8")
-        gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
         
-        # Modern ArUco Detection
-        corners, ids, _ = self.detector.detectMarkers(gray)
+        # --- FIX: Changed 'img' to 'cv_img' and used version-safe function call ---
+        corners, ids, _ = cv2.aruco.detectMarkers(
+            cv_img, 
+            self.aruco_dict, 
+            parameters=self.aruco_params
+        )
 
         if ids is not None:
             # Using the first marker detected
@@ -76,7 +77,7 @@ class IBVSController(Node):
             # Visual Feedback
             cv2.aruco.drawDetectedMarkers(cv_img, corners, ids)
             
-            # Calibration Logic (Press 'p')
+            # Calibration Logic (Press 'p' in the window)
             key = cv2.waitKey(1) & 0xFF
             if key == ord('p'):
                 self.s_star = s.copy()
@@ -89,11 +90,17 @@ class IBVSController(Node):
                     u, v = curr_corners[i]
                     
                     # Get depth Z at corner pixel (convert mm to meters)
-                    # Use a small window average or center point
                     try:
-                        z_raw = self.latest_depth_img[int(v), int(u)]
-                        Z = z_raw / 1000.0 if z_raw > 0 else 0.5 # default 0.5m if depth lost
-                    except IndexError:
+                        # Ensure coordinates are within image bounds
+                        v_idx, u_idx = int(v), int(u)
+                        height, width = self.latest_depth_img.shape
+                        
+                        if 0 <= v_idx < height and 0 <= u_idx < width:
+                            z_raw = self.latest_depth_img[v_idx, u_idx]
+                            Z = z_raw / 1000.0 if z_raw > 0 else 0.5 
+                        else:
+                            Z = 0.5
+                    except Exception:
                         Z = 0.5
                     
                     L_stacked.append(self.get_interaction_matrix(u, v, Z))
