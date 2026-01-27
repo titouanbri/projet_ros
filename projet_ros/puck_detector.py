@@ -9,6 +9,8 @@ from cv_bridge import CvBridge
 import cv2
 import time
 import numpy as np
+import os 
+from ament_index_python.packages import get_package_share_directory 
 
 from ultralytics import YOLO
 
@@ -16,10 +18,20 @@ class DetectionNode(Node):
     def __init__(self):
         super().__init__('detection_node')
 
+
+        #yolo bon path
         self.get_logger().info("Detection Node initialized")
+        package_share_directory = get_package_share_directory('projet_ros')
+        model_path = os.path.join(package_share_directory, 'models', 'puck_detector_n.pt')
+        try:
+            self.model = YOLO(model_path)
+        except Exception as e:
+            self.get_logger().error(f"Impossible de charger le modèle : {e}")
+            raise e
+      
 
         # YOLO
-        self.model = YOLO("models/puck_detector_n.pt")
+        # self.model = YOLO("models/puck_detector_n.pt")
 
         # ROS 
         self.br = CvBridge()
