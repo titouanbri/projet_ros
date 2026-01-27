@@ -25,27 +25,28 @@ class DetectionNode(Node):
         self.br = CvBridge()
         self.subscription = self.create_subscription(
             Image,
+            # '/camera/camera/color/image_raw',
             '/image_raw',
             self.image_callback,
-            10
+            1
         )
 
         self.image_pub = self.create_publisher(
             Image,
             '/detection_results',
-            10
+            3
         )
 
         self.center_pub = self.create_publisher(
             Point,
             '/detected_center',
-            10
+            3
         )
 
         self.corners_pub = self.create_publisher(
             Polygon,
             '/detected_corners',
-            10
+            3
         )
 
         # Tracking state 
@@ -78,7 +79,8 @@ class DetectionNode(Node):
             persist=True,
             classes=[0], 
             conf=self.conf_threshold,
-            verbose=False
+            verbose=False,
+            device='cpu'
         )
 
         res = results[0]

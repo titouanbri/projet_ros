@@ -15,16 +15,16 @@ class PBVSNode(Node):
 
         self.init_dlt=True   #defiine if we need to init the dlt
 
-        self.lmbda = 1.0        # Gain proportionnel (lambda)
-        self.dist_target = 0.1  # Distance désirée entre le marker et la cam
+        self.lmbda = 5      # Gain proportionnel (lambda)  1
+        self.dist_target = 0.1  # Distance désirée entre le marker et la cam   0.1
         
-        # self.target_frame = 'aruco_0'
         self.target_frame = 'puck_link'
+        # self.target_frame = 'aruco_0'
         self.camera_frame = 'camera_color_optical_frame'
         self.tool_frame = 'tool0'
         
-        self.MAX_LIN_VEL = 0.05  # m/s
-        self.MAX_ANG_VEL = 0.5   # rad/s
+        self.MAX_LIN_VEL = 0.01 # m/s   0.05
+        self.MAX_ANG_VEL = 0.05  # rad/s     0.5
 
         #pose désirée devant le marqueur        
         rot_target = R.from_euler('x', -180, degrees=True).as_matrix()

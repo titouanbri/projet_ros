@@ -17,11 +17,12 @@ class PnPNode(Node):
         self.get_logger().info("PnP Node initialized (Puck 3D Pose)")
 
         #dimension de l'objet
-        self.target_width = 0.054
-        self.target_height = 0.054
+        self.target_width = 0.025
+        self.target_height = 0.025
 
 
         #parametres cam si cam du pc
+        self.not_get = True
         img_w = 640.0
         img_h = 480.0
         fx = img_w  
@@ -45,7 +46,7 @@ class PnPNode(Node):
         #Sub
         self.info_sub = self.create_subscription(
             CameraInfo,
-            '/camera_info', 
+            '/camera/camera/color/camera_info',
             self.info_callback,
             10
         )
@@ -62,10 +63,11 @@ class PnPNode(Node):
 
     def info_callback(self, msg):
         # on prend les infos de la cam
-        if np.linalg.norm(np.array(msg.k).reshape((3, 3))) > 0.1 :
+        if np.linalg.norm(np.array(msg.k).reshape((3, 3))) > 0.1 and self.not_get:
             self.camera_matrix = np.array(msg.k).reshape((3, 3))
             self.dist_coeffs = np.array(msg.d)
             
+            self.not_get = False
             self.get_logger().info("Calibration RÉELLE reçue via /camera_info ! Remplacement des valeurs par défaut.")
             print("Camera Matrix:\n", self.camera_matrix)
             print("Distortion Coefficients:\n", self.dist_coeffs)
@@ -146,8 +148,8 @@ class PnPNode(Node):
             #Publication PoseStamped
             pose_msg = PoseStamped()
             pose_msg.header.stamp = self.get_clock().now().to_msg()
-            # pose_msg.header.frame_id = "camera_color_optical_frame"
-            pose_msg.header.frame_id = "camera_link"
+            pose_msg.header.frame_id = "camera_color_optical_frame"
+            # pose_msg.header.frame_id = "camera_link"
 
             
             pose_msg.pose.position.x = x_trans
