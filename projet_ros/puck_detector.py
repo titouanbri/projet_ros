@@ -45,25 +45,25 @@ class DetectionNode(Node):
             '/camera/camera/color/image_raw',
             # '/image_raw',
             self.image_callback,
-            3
+            2
         )
 
         self.image_pub = self.create_publisher(
             Image,
             '/detection_results',
-            10
+            2
         )
 
         self.center_pub = self.create_publisher(
             Point,
             '/detected_center',
-            10
+            2
         )
 
         self.corners_pub = self.create_publisher(
             Polygon,
             '/detected_corners',
-            10
+            2
         )
 
         # Tracking state 

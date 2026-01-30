@@ -112,7 +112,8 @@ class PBVSNode(Node):
         # Loi de commande PBVS dans repère caméra
         # Note: on utilise les variables e_p et e_o calculées juste au-dessus
         v_cam = -self.lmbda * e_p
-        w_cam = -self.lmbda * e_o
+        # w_cam = -self.lmbda * e_o
+        w_cam=np.array([0.0,0.0,0.0]) 
 
         # Passage de Caméra -> Tool via TF
         try:

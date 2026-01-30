@@ -14,13 +14,25 @@ class PnPNode(Node):
     def __init__(self):
         super().__init__('pnp_node')
 
-        self.get_logger().info("PnP Node initialized (Puck 3D Pose with 180 deg X rotation)")
+        self.get_logger().info("PnP Node initialized (Puck 3D Pose + Strong Filtering)")
 
-        #dimension de l'objet
+        # --- PARAMÈTRES DE LISSAGE (SOLUTION C) ---
+        # Alpha détermine la réactivité : 
+        # 1.0 = pas de filtre (réactif mais bruité)
+        # 0.1 = très lissé (stable mais lent à converger)
+        # Puisque l'objet est immobile, on peut mettre une valeur très basse.
+        self.alpha_pos = 0.6   # Filtrage très fort pour la position
+        self.alpha_rot = 0.2    # Filtrage pour l'orientation
+
+        # Variables pour stocker l'état précédent
+        self.prev_pos = None    # [x, y, z]
+        self.prev_quat = None   # [x, y, z, w]
+
+        # --- CONFIGURATION PnP ---
         self.target_width = 0.025
         self.target_height = 0.025
 
-        #parametres cam si cam du pc
+        # Parametres cam par défaut
         self.not_get = True
         img_w = 640.0
         img_h = 480.0
@@ -35,14 +47,13 @@ class PnPNode(Node):
             [ 0,  0,  1]
         ], dtype=np.float64)
 
-        # Pas de distorsion par défaut
         self.dist_coeffs = np.zeros((5, 1), dtype=np.float64)
         
         self.get_logger().warn(f"Calibration par défaut chargée. En attente de /camera_info...")
 
         self.tf_broadcaster = TransformBroadcaster(self)
 
-        #Sub
+        # Subscribers
         self.info_sub = self.create_subscription(
             CameraInfo,
             '/camera/camera/color/camera_info',
@@ -57,7 +68,7 @@ class PnPNode(Node):
             10
         )
 
-        #Pub
+        # Publishers
         self.pose_pub = self.create_publisher(PoseStamped, '/puck/pose', 10)
 
     def info_callback(self, msg):
@@ -71,19 +82,14 @@ class PnPNode(Node):
         # Conversion Rodrigues
         R, _ = cv2.Rodrigues(rvec)
         
-        # --- MODIFICATION ICI ---
-        # Rotation de 180 degrés (Pi radians) autour de l'axe X local
-        # Matrice de rotation X : [[1,0,0], [0, cos(pi), -sin(pi)], [0, sin(pi), cos(pi)]]
-        # Ce qui donne : [[1,0,0], [0,-1,0], [0,0,-1]]
+        # Rotation de 180 degrés autour de l'axe X local pour corriger l'orientation
         rot_x_180 = np.array([
             [1,  0,  0],
             [0, -1,  0],
             [0,  0, -1]
         ], dtype=np.float64)
 
-        # Application de la rotation locale (multiplication à droite)
         R = np.dot(R, rot_x_180)
-        # ------------------------
 
         tr = np.trace(R)
         q = [0, 0, 0, 0]
@@ -113,7 +119,7 @@ class PnPNode(Node):
             q[1] = (R[1, 2] + R[2, 1]) / S
             q[2] = 0.25 * S
             
-        return q
+        return np.array(q) # Retourne un numpy array pour faciliter les calculs
 
     def corners_callback(self, msg):
         if len(msg.points) != 4:
@@ -145,41 +151,66 @@ class PnPNode(Node):
         )
 
         if success:
-            x_trans = tvec[0][0]
-            y_trans = tvec[1][0]
-            z_trans = tvec[2][0]
+            # 1. Récupération des valeurs brutes
+            raw_pos = np.array([tvec[0][0], tvec[1][0], tvec[2][0]])
+            raw_quat = self.rvec_to_quaternion(rvec) # [x, y, z, w]
 
-            # La rotation est appliquée à l'intérieur de cette fonction maintenant
-            q = self.rvec_to_quaternion(rvec)
+            # 2. Application du filtre (Low Pass Filter)
+            if self.prev_pos is None:
+                # Initialisation
+                self.prev_pos = raw_pos
+                self.prev_quat = raw_quat
+                smoothed_pos = raw_pos
+                smoothed_quat = raw_quat
+            else:
+                # Filtrage Position
+                smoothed_pos = (self.alpha_pos * raw_pos) + ((1.0 - self.alpha_pos) * self.prev_pos)
+                
+                # Filtrage Orientation (LERP simple + Normalisation)
+                # Note: Pour de très petits changements, LERP est suffisant. SLERP est mieux mais plus coûteux.
+                smoothed_quat = (self.alpha_rot * raw_quat) + ((1.0 - self.alpha_rot) * self.prev_quat)
+                # Renormalisation obligatoire du quaternion
+                norm = np.linalg.norm(smoothed_quat)
+                if norm > 0:
+                    smoothed_quat /= norm
+                
+                # Mise à jour de l'état précédent
+                self.prev_pos = smoothed_pos
+                self.prev_quat = smoothed_quat
+
+            # 3. Préparation des messages avec les valeurs LISSÉES
+            x_out, y_out, z_out = smoothed_pos
+            qx_out, qy_out, qz_out, qw_out = smoothed_quat
 
             pose_msg = PoseStamped()
             pose_msg.header.stamp = self.get_clock().now().to_msg()
             pose_msg.header.frame_id = "camera_color_optical_frame"
             
-            pose_msg.pose.position.x = x_trans
-            pose_msg.pose.position.y = y_trans
-            pose_msg.pose.position.z = z_trans
+            pose_msg.pose.position.x = x_out
+            pose_msg.pose.position.y = y_out
+            pose_msg.pose.position.z = z_out
             
-            pose_msg.pose.orientation.x = q[0]
-            pose_msg.pose.orientation.y = q[1]
-            pose_msg.pose.orientation.z = q[2]
-            pose_msg.pose.orientation.w = q[3]
+            pose_msg.pose.orientation.x = qx_out
+            pose_msg.pose.orientation.y = qy_out
+            pose_msg.pose.orientation.z = qz_out
+            pose_msg.pose.orientation.w = qw_out
 
             self.pose_pub.publish(pose_msg)
 
+            # 4. TF Broadcast
             t = TransformStamped()
             t.header.stamp = pose_msg.header.stamp
             t.header.frame_id = pose_msg.header.frame_id
             t.child_frame_id = 'puck_link'
 
-            t.transform.translation.x = x_trans
-            t.transform.translation.y = y_trans
-            t.transform.translation.z = z_trans
+            t.transform.translation.x = x_out
+            t.transform.translation.y = y_out
+            t.transform.translation.z = z_out
 
-            t.transform.rotation.x = q[0]
-            t.transform.rotation.y = q[1]
-            t.transform.rotation.z = q[2]
-            t.transform.rotation.w = q[3]
+            t.transform.rotation.x = qx_out
+            t.transform.rotation.y = qy_out
+            t.transform.rotation.z = qz_out
+            t.transform.rotation.w = qw_out
 
             self.tf_broadcaster.sendTransform(t)
 
