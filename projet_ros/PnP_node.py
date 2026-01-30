@@ -14,12 +14,11 @@ class PnPNode(Node):
     def __init__(self):
         super().__init__('pnp_node')
 
-        self.get_logger().info("PnP Node initialized (Puck 3D Pose)")
+        self.get_logger().info("PnP Node initialized (Puck 3D Pose with 180 deg X rotation)")
 
         #dimension de l'objet
         self.target_width = 0.025
         self.target_height = 0.025
-
 
         #parametres cam si cam du pc
         self.not_get = True
@@ -39,7 +38,7 @@ class PnPNode(Node):
         # Pas de distorsion par défaut
         self.dist_coeffs = np.zeros((5, 1), dtype=np.float64)
         
-        self.get_logger().warn(f"Calibration par défaut chargée (Intrinsics: {fx}x{fy}). En attente de /camera_info pour affiner...")
+        self.get_logger().warn(f"Calibration par défaut chargée. En attente de /camera_info...")
 
         self.tf_broadcaster = TransformBroadcaster(self)
 
@@ -62,20 +61,30 @@ class PnPNode(Node):
         self.pose_pub = self.create_publisher(PoseStamped, '/puck/pose', 10)
 
     def info_callback(self, msg):
-        # on prend les infos de la cam
         if np.linalg.norm(np.array(msg.k).reshape((3, 3))) > 0.1 and self.not_get:
             self.camera_matrix = np.array(msg.k).reshape((3, 3))
             self.dist_coeffs = np.array(msg.d)
-            
             self.not_get = False
-            self.get_logger().info("Calibration RÉELLE reçue via /camera_info ! Remplacement des valeurs par défaut.")
-            print("Camera Matrix:\n", self.camera_matrix)
-            print("Distortion Coefficients:\n", self.dist_coeffs)
+            self.get_logger().info("Calibration RÉELLE reçue !")
 
     def rvec_to_quaternion(self, rvec):
-
+        # Conversion Rodrigues
         R, _ = cv2.Rodrigues(rvec)
         
+        # --- MODIFICATION ICI ---
+        # Rotation de 180 degrés (Pi radians) autour de l'axe X local
+        # Matrice de rotation X : [[1,0,0], [0, cos(pi), -sin(pi)], [0, sin(pi), cos(pi)]]
+        # Ce qui donne : [[1,0,0], [0,-1,0], [0,0,-1]]
+        rot_x_180 = np.array([
+            [1,  0,  0],
+            [0, -1,  0],
+            [0,  0, -1]
+        ], dtype=np.float64)
+
+        # Application de la rotation locale (multiplication à droite)
+        R = np.dot(R, rot_x_180)
+        # ------------------------
+
         tr = np.trace(R)
         q = [0, 0, 0, 0]
 
@@ -107,7 +116,6 @@ class PnPNode(Node):
         return q
 
     def corners_callback(self, msg):
-
         if len(msg.points) != 4:
             return
 
@@ -118,7 +126,6 @@ class PnPNode(Node):
             [msg.points[3].x, msg.points[3].y] 
         ], dtype=np.float32)
 
-        # definition des point del'objet 
         w = self.target_width
         h = self.target_height
         
@@ -129,7 +136,6 @@ class PnPNode(Node):
             [-w / 2.0,  h / 2.0, 0.0]
         ], dtype=np.float32)
 
-        # librairie OpenCV pour le PnP
         success, rvec, tvec = cv2.solvePnP(
             object_points, 
             image_points, 
@@ -143,14 +149,12 @@ class PnPNode(Node):
             y_trans = tvec[1][0]
             z_trans = tvec[2][0]
 
+            # La rotation est appliquée à l'intérieur de cette fonction maintenant
             q = self.rvec_to_quaternion(rvec)
 
-            #Publication PoseStamped
             pose_msg = PoseStamped()
             pose_msg.header.stamp = self.get_clock().now().to_msg()
             pose_msg.header.frame_id = "camera_color_optical_frame"
-            # pose_msg.header.frame_id = "camera_link"
-
             
             pose_msg.pose.position.x = x_trans
             pose_msg.pose.position.y = y_trans
@@ -163,7 +167,6 @@ class PnPNode(Node):
 
             self.pose_pub.publish(pose_msg)
 
-            # Publication TF
             t = TransformStamped()
             t.header.stamp = pose_msg.header.stamp
             t.header.frame_id = pose_msg.header.frame_id

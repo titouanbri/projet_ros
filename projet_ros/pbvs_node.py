@@ -12,21 +12,18 @@ class PBVSNode(Node):
     def __init__(self):
         super().__init__('pbvs_node')
 
-
-        self.init_dlt=True   #defiine if we need to init the dlt
-
-        self.lmbda = 5      # Gain proportionnel (lambda)  1
-        self.dist_target = 0.1  # Distance désirée entre le marker et la cam   0.1
+        self.init_dlt=True
+        self.lmbda = 5      
+        self.dist_target = 0.1 
         
         self.target_frame = 'puck_link'
-        # self.target_frame = 'aruco_0'
         self.camera_frame = 'camera_color_optical_frame'
         self.tool_frame = 'tool0'
         
-        self.MAX_LIN_VEL = 0.01 # m/s   0.05
-        self.MAX_ANG_VEL = 0.05  # rad/s     0.5
+        self.MAX_LIN_VEL = 0.05 
+        self.MAX_ANG_VEL = 0.1  
 
-        #pose désirée devant le marqueur        
+        # Pose désirée
         rot_target = R.from_euler('x', -180, degrees=True).as_matrix()
         pos_target = np.array([0.0, 0.0, self.dist_target])
         
@@ -40,6 +37,10 @@ class PBVSNode(Node):
 
         # Publisher vitesse
         self.vel_pub = self.create_publisher(Twist, '/ee_velocity_cmd', 10)
+
+        # --- AJOUT: Publisher pour l'erreur ---
+        # On utilise Twist car l'erreur a 6 composantes (3 lin, 3 ang)
+        self.error_pub = self.create_publisher(Twist, '/pbvs_error', 10)
         
         # Timer de contrôle 
         self.timer = self.create_timer(0.1, self.control_loop)
@@ -47,61 +48,73 @@ class PBVSNode(Node):
         self.get_logger().info("node launched")
 
     def transform_to_matrix(self, t_stamped):
-        #transform a TF in a matrix 4x4
         t = t_stamped.transform.translation
         r = t_stamped.transform.rotation
-        
         mat = np.eye(4)
         mat[:3, :3] = R.from_quat([r.x, r.y, r.z, r.w]).as_matrix()
         mat[:3, 3] = [t.x, t.y, t.z]
         return mat
 
     def limit_velocity(self, v, max_val):
-        
         norm = np.linalg.norm(v)
         if norm > max_val:
-            return v * (max_val / norm)  #keep the direction
+            return v * (max_val / norm) 
         return v
 
     def control_loop(self):       
         try:
-            # marker/cam TF
             t_cam_marker = self.tf_buffer.lookup_transform(
                 self.camera_frame,      
-                self.target_frame,      #marker
+                self.target_frame,
                 rclpy.time.Time()
             )
-            # current time
             now = self.get_clock().now()
-            # timestamp de la TF
             tf_time = rclpy.time.Time.from_msg(t_cam_marker.header.stamp)
             age = (now - tf_time).nanoseconds / 1e9
             
             if age > 0.5:
-                # if too old, stop
-                self.vel_pub.publish(Twist()) # STOP
+                self.vel_pub.publish(Twist()) 
                 return
         except TransformException as ex:
-            self.vel_pub.publish(Twist()) # Stop
+            self.vel_pub.publish(Twist()) 
             return
 
         # Convert to matrix 
         T_curr = self.transform_to_matrix(t_cam_marker)
          
-        # error in camera frame (mezouar TP1)
+        # Calcul de la transformation d'erreur (Mezouar)
         X = self.T_des @ np.linalg.inv(T_curr)
-
+        
         R_mat = X[:3, :3]
         t_vec = X[:3, 3]
 
-        r_obj = R.from_matrix(R_mat)    #intermediate rotation object
-        rot_vec = r_obj.as_rotvec()   #rotation vector (angle-axis)
+        r_obj = R.from_matrix(R_mat)    
+        rot_vec = r_obj.as_rotvec()   
+
+        # --- EXTRACTION DE L'ERREUR POUR PLOT ---
+        # L'erreur linéaire doit être projetée dans le repère courant pour correspondre à la loi de commande
+        # C'est ce vecteur exact que le gain lambda multiplie
+        e_p = R_mat.T @ t_vec   # Erreur position (x, y, z)
+        e_o = rot_vec           # Erreur orientation (rx, ry, rz)
+
+        # --- AJOUT: Publication de l'erreur ---
+        err_msg = Twist()
+        # Erreur linéaire (mètres)
+        err_msg.linear.x = float(e_p[0])
+        err_msg.linear.y = float(e_p[1])
+        err_msg.linear.z = float(e_p[2])
+        # Erreur angulaire (radians)
+        err_msg.angular.x = float(e_o[0])
+        err_msg.angular.y = float(e_o[1])
+        err_msg.angular.z = float(e_o[2])
+        self.error_pub.publish(err_msg)
 
         # Loi de commande PBVS dans repère caméra
-        v_cam = -self.lmbda * (R_mat.T @ t_vec)
-        w_cam = -self.lmbda * rot_vec
+        # Note: on utilise les variables e_p et e_o calculées juste au-dessus
+        v_cam = -self.lmbda * e_p
+        w_cam = -self.lmbda * e_o
 
-        # passage de Caméra -> Tool via TF
+        # Passage de Caméra -> Tool via TF
         try:
             t_tool_cam = self.tf_buffer.lookup_transform(
                 self.tool_frame,
@@ -113,10 +126,9 @@ class PBVSNode(Node):
             self.vel_pub.publish(Twist())
             return
 
-        # Matrice de transformation Tool -> Cam
         T_tc = self.transform_to_matrix(t_tool_cam)
-        R_tc = T_tc[:3, :3] # Rotation
-        P_tc = T_tc[:3, 3]  # Translation (Bras de levier)
+        R_tc = T_tc[:3, :3] 
+        P_tc = T_tc[:3, 3]  
 
         v_cam_in_tool = R_tc @ v_cam
         w_cam_in_tool = R_tc @ w_cam
@@ -124,7 +136,6 @@ class PBVSNode(Node):
         v_tool = v_cam_in_tool + np.cross(P_tc, w_cam_in_tool)
         w_tool = w_cam_in_tool
 
-        # limitation des vitesses
         v_tool = self.limit_velocity(v_tool, self.MAX_LIN_VEL)
         w_tool = self.limit_velocity(w_tool, self.MAX_ANG_VEL)
 
@@ -138,13 +149,13 @@ class PBVSNode(Node):
 
         self.vel_pub.publish(cmd)
 
+# ... (reste du main identique)
 def main(args=None):
     rclpy.init(args=args)
     node = PBVSNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        # Arrêt propre
         stop = Twist()
         node.vel_pub.publish(stop)
     finally:

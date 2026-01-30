@@ -22,13 +22,18 @@ class DetectionNode(Node):
         #yolo bon path
         self.get_logger().info("Detection Node initialized")
         package_share_directory = get_package_share_directory('projet_ros')
-        model_path = os.path.join(package_share_directory, 'models', 'puck_detector_n.pt')
+        # model_path = os.path.join(package_share_directory, 'models', 'puck_detector_n.pt')
+        model_path = os.path.join(package_share_directory, 'models', 'puck_detector_n_openvino_model')
+
         try:
-            self.model = YOLO(model_path)
+            # self.model = YOLO(model_path)
+            self.model = YOLO(model_path, task='detect')
+
         except Exception as e:
             self.get_logger().error(f"Impossible de charger le modèle : {e}")
             raise e
       
+      # Dans ton __init__
 
         # YOLO
         # self.model = YOLO("models/puck_detector_n.pt")
@@ -37,28 +42,28 @@ class DetectionNode(Node):
         self.br = CvBridge()
         self.subscription = self.create_subscription(
             Image,
-            # '/camera/camera/color/image_raw',
-            '/image_raw',
+            '/camera/camera/color/image_raw',
+            # '/image_raw',
             self.image_callback,
-            1
+            3
         )
 
         self.image_pub = self.create_publisher(
             Image,
             '/detection_results',
-            3
+            10
         )
 
         self.center_pub = self.create_publisher(
             Point,
             '/detected_center',
-            3
+            10
         )
 
         self.corners_pub = self.create_publisher(
             Polygon,
             '/detected_corners',
-            3
+            10
         )
 
         # Tracking state 
