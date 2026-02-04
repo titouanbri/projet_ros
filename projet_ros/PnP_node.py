@@ -6,6 +6,8 @@ from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo
 from geometry_msgs.msg import Polygon, PoseStamped, TransformStamped
 from tf2_ros import TransformBroadcaster
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
 import cv2
 import numpy as np
 import math
@@ -14,23 +16,24 @@ class PnPNode(Node):
     def __init__(self):
         super().__init__('pnp_node')
 
-        self.get_logger().info("PnP Node initialized (Puck 3D Pose + Strong Filtering)")
+        self.get_logger().info("PnP Node initialized (Puck 3D Pose + Vertical Alignment)")
+
+        # --- TF BUFFER & LISTENER ---
+        # Nécessaire pour connaître l'orientation de la caméra par rapport à base_link
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # --- PARAMÈTRES DE LISSAGE (SOLUTION C) ---
-        # Alpha détermine la réactivité : 
-        # 1.0 = pas de filtre (réactif mais bruité)
-        # 0.1 = très lissé (stable mais lent à converger)
-        # Puisque l'objet est immobile, on peut mettre une valeur très basse.
         self.alpha_pos = 0.6   # Filtrage très fort pour la position
-        self.alpha_rot = 0.2    # Filtrage pour l'orientation
+        self.alpha_rot = 0.2   # Filtrage pour l'orientation
 
         # Variables pour stocker l'état précédent
         self.prev_pos = None    # [x, y, z]
         self.prev_quat = None   # [x, y, z, w]
 
         # --- CONFIGURATION PnP ---
-        self.target_width = 0.025
-        self.target_height = 0.025
+        self.target_width = 0.031
+        self.target_height = 0.031
 
         # Parametres cam par défaut
         self.not_get = True
@@ -78,19 +81,8 @@ class PnPNode(Node):
             self.not_get = False
             self.get_logger().info("Calibration RÉELLE reçue !")
 
-    def rvec_to_quaternion(self, rvec):
-        # Conversion Rodrigues
-        R, _ = cv2.Rodrigues(rvec)
-        
-        # Rotation de 180 degrés autour de l'axe X local pour corriger l'orientation
-        rot_x_180 = np.array([
-            [1,  0,  0],
-            [0, -1,  0],
-            [0,  0, -1]
-        ], dtype=np.float64)
-
-        R = np.dot(R, rot_x_180)
-
+    def matrix_to_quaternion(self, R):
+        """Convertit une matrice de rotation 3x3 en quaternion [x, y, z, w]."""
         tr = np.trace(R)
         q = [0, 0, 0, 0]
 
@@ -119,7 +111,67 @@ class PnPNode(Node):
             q[1] = (R[1, 2] + R[2, 1]) / S
             q[2] = 0.25 * S
             
-        return np.array(q) # Retourne un numpy array pour faciliter les calculs
+        return np.array(q)
+
+    def quat_to_mat(self, q):
+        """Convertit un quaternion (de geometry_msgs ou objet avec .x .y .z .w) en matrice 3x3."""
+        x, y, z, w = q.x, q.y, q.z, q.w
+        return np.array([
+            [1 - 2*y*y - 2*z*z, 2*x*y - 2*z*w,     2*x*z + 2*y*w],
+            [2*x*y + 2*z*w,     1 - 2*x*x - 2*z*z, 2*y*z - 2*x*w],
+            [2*x*z - 2*y*w,     2*y*z + 2*x*w,     1 - 2*x*x - 2*y*y]
+        ], dtype=np.float64)
+
+    def compute_constrained_orientation(self, rvec, z_target_cam):
+        """
+        Calcule une orientation où l'axe Z de l'objet est aligné avec z_target_cam,
+        mais l'axe X (Yaw) respecte la détection du PnP.
+        """
+        # 1. Conversion PnP Rodrigues -> Matrice
+        R_pnp, _ = cv2.Rodrigues(rvec)
+        
+        # 2. Correction initiale (comme dans votre code original pour aligner les axes PnP)
+        rot_x_180 = np.array([
+            [1,  0,  0],
+            [0, -1,  0],
+            [0,  0, -1]
+        ], dtype=np.float64)
+        R_pnp = np.dot(R_pnp, rot_x_180)
+
+        # 3. Extraction de l'axe X détecté (C'est la direction "avant" du puck)
+        x_pnp = R_pnp[:, 0]
+
+        # 4. Construction de la nouvelle base
+        # Z_new : On force l'axe Z à être le vecteur cible (le ciel vu depuis la caméra)
+        z_new = z_target_cam
+        norm_z = np.linalg.norm(z_new)
+        if norm_z > 1e-6:
+            z_new /= norm_z
+        else:
+            z_new = np.array([0, 0, -1]) # Fallback
+
+        # X_new : On projette x_pnp sur le plan orthogonal à z_new
+        # X_proj = X - (X . Z) * Z
+        dot = np.dot(x_pnp, z_new)
+        x_new = x_pnp - (dot * z_new)
+        
+        norm_x = np.linalg.norm(x_new)
+        if norm_x > 1e-6:
+            x_new /= norm_x
+        else:
+            # Cas rare : X est parallèle à Z (Gimbal lock), on choisit un X arbitraire
+            x_new = np.cross(np.array([0, 1, 0]), z_new)
+            if np.linalg.norm(x_new) < 1e-6:
+                x_new = np.cross(np.array([1, 0, 0]), z_new)
+            x_new /= np.linalg.norm(x_new)
+
+        # Y_new : Produit vectoriel pour finir la base orthonormée
+        y_new = np.cross(z_new, x_new)
+
+        # 5. Construction de la matrice finale
+        R_final = np.column_stack((x_new, y_new, z_new))
+
+        return self.matrix_to_quaternion(R_final)
 
     def corners_callback(self, msg):
         if len(msg.points) != 4:
@@ -151,34 +203,53 @@ class PnPNode(Node):
         )
 
         if success:
-            # 1. Récupération des valeurs brutes
+            # --- RECUPERATION DU VECTEUR "CIEL" (Z WORLD) DANS LE REPERE CAMERA ---
+            z_target_cam = np.array([0.0, 0.0, -1.0]) # Valeur par défaut (face caméra)
+            
+            try:
+                # On cherche la transfo : Base (World) -> Camera
+                # Cela nous permet de savoir comment le vecteur Z=(0,0,1) de la base est vu par la caméra
+                t_stamped = self.tf_buffer.lookup_transform(
+                    'camera_color_optical_frame', # Target frame
+                    'base_link',                  # Source frame (Repère Global)
+                    rclpy.time.Time()
+                )
+                
+                # Convertir le quaternion de la transfo en matrice de rotation
+                R_base_to_cam = self.quat_to_mat(t_stamped.transform.rotation)
+                
+                # Le vecteur Z du monde est [0, 0, 1] dans base_link.
+                # Une fois tourné dans le repère caméra, c'est simplement la 3ème colonne de la matrice.
+                z_target_cam = R_base_to_cam @ np.array([0, 0, 1])
+
+            except Exception as e:
+                # Si TF pas prêt, on garde le comportement par défaut (mais on log pas à chaque frame pour éviter le spam)
+                pass
+
+            # 1. Récupération des valeurs
             raw_pos = np.array([tvec[0][0], tvec[1][0], tvec[2][0]])
-            raw_quat = self.rvec_to_quaternion(rvec) # [x, y, z, w]
+            
+            # Calcul de l'orientation contrainte (Z aligné sur base_link Z, X aligné sur détection PnP)
+            raw_quat = self.compute_constrained_orientation(rvec, z_target_cam)
 
             # 2. Application du filtre (Low Pass Filter)
             if self.prev_pos is None:
-                # Initialisation
                 self.prev_pos = raw_pos
                 self.prev_quat = raw_quat
                 smoothed_pos = raw_pos
                 smoothed_quat = raw_quat
             else:
-                # Filtrage Position
                 smoothed_pos = (self.alpha_pos * raw_pos) + ((1.0 - self.alpha_pos) * self.prev_pos)
-                
-                # Filtrage Orientation (LERP simple + Normalisation)
-                # Note: Pour de très petits changements, LERP est suffisant. SLERP est mieux mais plus coûteux.
                 smoothed_quat = (self.alpha_rot * raw_quat) + ((1.0 - self.alpha_rot) * self.prev_quat)
-                # Renormalisation obligatoire du quaternion
+                
                 norm = np.linalg.norm(smoothed_quat)
                 if norm > 0:
                     smoothed_quat /= norm
                 
-                # Mise à jour de l'état précédent
                 self.prev_pos = smoothed_pos
                 self.prev_quat = smoothed_quat
 
-            # 3. Préparation des messages avec les valeurs LISSÉES
+            # 3. Préparation des messages
             x_out, y_out, z_out = smoothed_pos
             qx_out, qy_out, qz_out, qw_out = smoothed_quat
 

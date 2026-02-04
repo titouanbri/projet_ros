@@ -40,8 +40,6 @@ setup(
             'camera_tf_broadcaster = projet_ros.camera_tf_broadcaster:main',
             'test_pbvs = projet_ros.test_pbvs:main',
             'PnP_node = projet_ros.PnP_node:main',
-            'puck_detector_titou = projet_ros.puck_detector_titou:main',
-            'planar_pose_node = projet_ros.planar_pose_node:main',
 
         ],
     },

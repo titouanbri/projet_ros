@@ -13,9 +13,10 @@ class PBVSNode(Node):
         super().__init__('pbvs_node')
 
         self.init_dlt=True
-        self.lmbda = 5      
-        self.dist_target = 0.1 
+        self.lmbda = 1      
+        self.dist_target = 0.15
         
+        # self.target_frame='aruco_0'
         self.target_frame = 'puck_link'
         self.camera_frame = 'camera_color_optical_frame'
         self.tool_frame = 'tool0'
@@ -108,12 +109,17 @@ class PBVSNode(Node):
         err_msg.angular.y = float(e_o[1])
         err_msg.angular.z = float(e_o[2])
         self.error_pub.publish(err_msg)
+        print(np.linalg.norm(e_p))
+
+        if np.linalg.norm(e_p) < 0.005:
+            self.vel_pub.publish(Twist())
+            return
 
         # Loi de commande PBVS dans repère caméra
         # Note: on utilise les variables e_p et e_o calculées juste au-dessus
         v_cam = -self.lmbda * e_p
-        # w_cam = -self.lmbda * e_o
-        w_cam=np.array([0.0,0.0,0.0]) 
+        w_cam = -self.lmbda * e_o
+        # w_cam=np.array([0.0,0.0,0.0]) 
 
         # Passage de Caméra -> Tool via TF
         try:
