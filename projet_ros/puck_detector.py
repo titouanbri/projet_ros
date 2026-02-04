@@ -83,12 +83,25 @@ class DetectionNode(Node):
     def image_callback(self, msg):
         now = time.time()
 
+        # --- CORRECTION ICI : Vérification de validité ---
+        if msg.data is None or len(msg.data) == 0:
+            self.get_logger().warn("Image vide reçue (taille 0), frame ignorée.")
+            return
+
+        if msg.width == 0 or msg.height == 0:
+            self.get_logger().warn("Image avec dimensions nulles reçue, frame ignorée.")
+            return
+        # -----------------------------------------------
+
         # ROS → OpenCV
         try:
-            cv_image = self.br.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            # Si l'erreur persiste, essayez 'passthrough' au lieu de 'bgr8' pour voir le format natif
+            cv_image = self.br.imgmsg_to_cv2(msg, desired_encoding='passthrough') 
         except Exception as e:
             self.get_logger().error(f"Erreur conversion image: {e}")
             return
+
+        # ... (le reste du code reste identique) ...
 
         # YOLO tracking
         results = self.model.track(
