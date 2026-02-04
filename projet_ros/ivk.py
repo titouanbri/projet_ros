@@ -64,7 +64,7 @@ class UR3eIVK(Node):
                                  wrist3_tf.transform.translation.y,
                                  wrist3_tf.transform.translation.z])
         except TransformException:
-            self.get_logger().warn("TF lookup failed; waiting for transforms...")
+            self.get_logger().warn("TF lookup failed; waiting for transforms...", throttle_duration_sec=1)
             return
 
         N = len(links)

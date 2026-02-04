@@ -1,3 +1,5 @@
+
+#broadcasts desired tf wrt aruco marker
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import TransformStamped
@@ -129,7 +131,7 @@ class ArucoDesiredPoseNode(Node):
                 # Define desired pose wrt ARUCO (e.g., 5cm above)
                 H_desired = np.eye(4)
                 H_desired[:3,:3] = RPY_to_R(np.pi,0,np.pi/2)
-                H_desired[:3,3] = np.array([0,0,0.25])  # 5cm offset along marker z
+                H_desired[:3,3] = np.array([0,0,0.15])  # 5cm offset along marker z
 
                 t_marker = self.marker_tf.transform.translation
                 q_marker = self.marker_tf.transform.rotation

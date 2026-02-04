@@ -2,7 +2,7 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Float64, String
+from std_msgs.msg import Float64, String, Bool
 import tkinter as tk
 
 class EEVelTeleopGUI(Node):
@@ -23,7 +23,7 @@ class EEVelTeleopGUI(Node):
         self.cmd_pub = self.create_publisher(Twist, self.cmd_pub_topic, 1)
         self.frame_pub = self.create_publisher(String, "/work_frame", 1)
         self.filter_pub = self.create_publisher(Float64, "/joint_velocity_controller/joint_velocity_filter", 1)
-
+        self.pose_ctrl_disabler = self.create_publisher(Bool, '/auto_pose_control_enabled', 1)
         # GUI setup
         self.root = tk.Tk()
         self.root.title("UR3e Cartesian Velocity Teleop")
@@ -109,6 +109,7 @@ class EEVelTeleopGUI(Node):
         self.cmd.angular.z = ang_coef * 0.06 * angular[2]
 
     def start_motion(self, cmd_fn):
+        self.pose_ctrl_disabler.publish(Bool(data=False))
         cmd_fn()
         self.active_cmd = self.cmd
 

@@ -40,82 +40,87 @@ class CamPoseController(Node):
         super().__init__('cam_pose_controller')
 
         self.cmd_pub = self.create_publisher(Twist, '/ee_velocity_cmd', 1)
+        self.state_pub = self.create_publisher(Bool, '/homed',1)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        
 
-        self.error = 0.0
-        self.state = True
-        self.create_subscription(Bool, '/auto_pose_control_enabled', self.reached_cb, 1)
+        self.target_tf = TransformStamped()
+        self.target_tf.header.frame_id="base_link"
+        self.target_tf.header.stamp = self.get_clock().now().to_msg()
+        self.target_tf.child_frame_id = "home"
+        self.target_tf.transform.translation.x = 0.106
+        self.target_tf.transform.translation.y = 0.265
+        self.target_tf.transform.translation.z = 0.3
+        self.target_tf.transform.rotation.x = 0.0
+        self.target_tf.transform.rotation.y = -1.0
+        self.target_tf.transform.rotation.z = 0.0
+        self.target_tf.transform.rotation.w = 0.0
+        
+        self.error = 1e9
 
         self.dt = 0.01  # control loop period
         self.timer = self.create_timer(self.dt, self.timer_cb)
-
-
-    def reached_cb(self,msg : Bool):
-        self.state = msg.data
 
     def timer_cb(self):
         try:
             base_frame = "base_link"
             ee_frame = "wrist_3_link"
-            target_frame = "desired_ee"  # TF representing desired pose
 
-
-            if self.tf_buffer.can_transform(base_frame, ee_frame, rclpy.time.Time()) and \
-               self.tf_buffer.can_transform(base_frame, target_frame, rclpy.time.Time()):
+            if self.tf_buffer.can_transform(base_frame, ee_frame, rclpy.time.Time()):
 
                 ee_tf = self.tf_buffer.lookup_transform(
                     base_frame, ee_frame, rclpy.time.Time(),
                     timeout=rclpy.duration.Duration(seconds=self.dt)
                 )
-                
-                target_tf = self.tf_buffer.lookup_transform(
-                    base_frame, target_frame, rclpy.time.Time(),
-                    timeout=rclpy.duration.Duration(seconds=self.dt)
-                )
 
-                # --- Current end-effector pose ---
-                t_ee = ee_tf.transform.translation
-                R_ee = quaternion_to_rotation_matrix(
-                    ee_tf.transform.rotation.x,
-                    ee_tf.transform.rotation.y,
-                    ee_tf.transform.rotation.z,
-                    ee_tf.transform.rotation.w
-                )
-                x_ee = np.array([t_ee.x, t_ee.y, t_ee.z])
-                H_ee = np.block([[R_ee, x_ee.reshape(3,1)],
-                                [np.zeros((1,3)), 1]])
-
-                # --- Desired pose from TF ---
-                t_d = target_tf.transform.translation
-                R_d = quaternion_to_rotation_matrix(
-                    target_tf.transform.rotation.x,
-                    target_tf.transform.rotation.y,
-                    target_tf.transform.rotation.z,
-                    target_tf.transform.rotation.w
-                )
-                x_d = np.array([t_d.x, t_d.y, t_d.z])
-
-                H_d = np.block([[R_d, x_d.reshape(3,1)],
-                                [np.zeros((1,3)), 1]])
-
-                # --- Compute error in se(3) ---
-                err_hat = logm(np.linalg.inv(H_ee) @ H_d)
-                xi_err = hat_to_twist(err_hat)
-
-                self.error = np.linalg.norm(xi_err)
-
-                if self.error > 1e-3:
-                    self.compute_twist(xi_err)
+                self.compute_twist(ee_tf, self.target_tf)
 
         except (tf2_ros.LookupException, tf2_ros.ExtrapolationException, tf2_ros.ConnectivityException) as e:
             self.get_logger().warn(f"Problem getting TFs: {e}", throttle_duration_sec=5.0)
 
-    def compute_twist(self, xi_err : np.ndarray):
+    def compute_twist(self, ee_tf: TransformStamped, target_tf: TransformStamped):
         Kp = 1
+
+        # --- Current end-effector pose ---
+        t_ee = ee_tf.transform.translation
+        R_ee = quaternion_to_rotation_matrix(
+            ee_tf.transform.rotation.x,
+            ee_tf.transform.rotation.y,
+            ee_tf.transform.rotation.z,
+            ee_tf.transform.rotation.w
+        )
+        x_ee = np.array([t_ee.x, t_ee.y, t_ee.z])
+        H_ee = np.block([[R_ee, x_ee.reshape(3,1)],
+                         [np.zeros((1,3)), 1]])
+
+        # --- Desired pose from TF ---
+        t_d = target_tf.transform.translation
+        R_d = quaternion_to_rotation_matrix(
+            target_tf.transform.rotation.x,
+            target_tf.transform.rotation.y,
+            target_tf.transform.rotation.z,
+            target_tf.transform.rotation.w
+        )
+        x_d = np.array([t_d.x, t_d.y, t_d.z])
+
+        #x_d = np.array([0.3,0.3,0.3])
+        #R_d = RPY_to_R(-np.pi/2,0,0)
+
+        H_d = np.block([[R_d, x_d.reshape(3,1)],
+                        [np.zeros((1,3)), 1]])
+
+        # --- Compute error in se(3) ---
+        err_hat = logm(np.linalg.inv(H_ee) @ H_d)
+        xi_err = hat_to_twist(err_hat)
+
+        self.error = np.linalg.norm(xi_err)
+
         ctrl = Kp * xi_err
         v = ctrl[3:];w = ctrl[:3]
         v = clamp(v,0.05); w = clamp(w,0.15)
+
+
 
         # --- Publish twist command ---
         twist_out = Twist()
@@ -128,13 +133,19 @@ class CamPoseController(Node):
         twist_out.linear.y = float(v[1])
         twist_out.linear.z = float(v[2])
 
-        if self.state:
-            self.cmd_pub.publish(twist_out)
+        self.cmd_pub.publish(twist_out)
 
 def main(args=None):
     rclpy.init(args=args)
     node = CamPoseController()
-    rclpy.spin(node)
+    
+    while node.error > 1e-3:
+        rclpy.spin_once(node)
+
+    
+    node.state_pub.publish(Bool(data=True))
+    rclpy.spin_once(node)
+    node.get_logger().warn("HOMING COMPLETE")
     node.destroy_node()
     rclpy.shutdown()
 

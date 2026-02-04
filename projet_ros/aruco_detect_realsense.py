@@ -124,7 +124,7 @@ class ArucoTrackingNode(Node):
 
         try:
             cam_tf = self.tf_buffer.lookup_transform(
-                'base_link', 'camera_color_frame', # adjust to your camera frame
+                'base_link', 'camera_link', # adjust to your camera frame
                 rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=0.01)
             )
