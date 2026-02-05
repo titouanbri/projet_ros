@@ -32,8 +32,8 @@ class PnPNode(Node):
         self.prev_quat = None   # [x, y, z, w]
 
         # --- CONFIGURATION PnP ---
-        self.target_width = 0.031
-        self.target_height = 0.031
+        self.target_width = 0.027
+        self.target_height = 0.027
 
         # Parametres cam par défaut
         self.not_get = True

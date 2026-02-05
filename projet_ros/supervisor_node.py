@@ -15,6 +15,7 @@ class SupervisorNode(Node):
         self.target_frame = 'puck_link'  # L'objet suivi par le PBVS
         self.base_frame = 'base_link'
         self.desired_frame_name = 'desired_ee'
+        self.actual_ee_frame = 'wrist_3_link' # La vraie frame du robot à contrôler (à adapter selon votre robot)
 
         # --- Machine à états ---
         # States: 'PBVS', 'TRANSITION', 'POSE_CONTROL', 'FINISHED'
@@ -106,28 +107,43 @@ class SupervisorNode(Node):
                 self.target_frame,
                 rclpy.time.Time()
             )
+
+
+            # On récupère l'ORIENTATION actuelle du robot (pour la figer)
+            t_current_ee = self.tf_buffer.lookup_transform(
+                self.base_frame,
+                self.actual_ee_frame, # La frame réelle du robot
+                rclpy.time.Time()
+            )
             
             # Création du message TransformStamped pour 'desired_ee'
             d = TransformStamped()
             d.header.stamp = self.get_clock().now().to_msg()
-            d.header.frame_id = self.base_frame
+            d.header.frame_id = self.base_frame 
+            # d.header.frame_id = 'puck_link' # On peut aussi faire desired_ee fixé au puck, ça rend la tâche plus facile pour le pose control
+
+        
+
             d.child_frame_id = self.desired_frame_name
             
             # Position : On garde la position du puck (ou on ajoute un offset Z pour l'approche)
-            d.transform.translation.x = t.transform.translation.x
-            d.transform.translation.y = t.transform.translation.y
-            d.transform.translation.z = t.transform.translation.z + 0.15 # + 0.05 par exemple
-            
-            # Orientation : On impose une orientation fixe (ex: Pince vers le bas)
-            # Remplacement de l'orientation du puck par une orientation canonique pour la prise
-            # Ex: Rotation de 180° autour de X pour pointer vers le bas (dépend de votre robot)
-            r = R.from_euler('x', 180, degrees=True)
-            quat = r.as_quat()
-            
-            d.transform.rotation.x = quat[0]
-            d.transform.rotation.y = quat[1]
-            d.transform.rotation.z = quat[2]
-            d.transform.rotation.w = quat[3]
+            d.transform.translation.x = t.transform.translation.x #0
+            d.transform.translation.y = t.transform.translation.y #0
+            d.transform.translation.z = t.transform.translation.z + 0.15 # + 0.15 par exemple
+
+            d.transform.rotation.x = t_current_ee.transform.rotation.x #1
+            d.transform.rotation.y = t_current_ee.transform.rotation.y #0
+            d.transform.rotation.z = t_current_ee.transform.rotation.z #0
+            d.transform.rotation.w = t_current_ee.transform.rotation.w #0
+
+            # d.transform.translation.x = 0.
+            # d.transform.translation.y = 0.
+            # d.transform.translation.z = 0.15
+            # d.transform.rotation.x = 1.
+            # d.transform.rotation.y = 0.
+            # d.transform.rotation.z = 0.
+            # d.transform.rotation.w = 0.
+
             
             self.desired_transform = d
             return True
