@@ -141,7 +141,7 @@ class PBVSNode(Node):
             self.threshold_reached = True
             msg_done.data = True
             self.vel_pub.publish(Twist())
-            return
+            
         else :
             msg_done.data = False
         
