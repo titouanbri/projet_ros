@@ -7,6 +7,7 @@ from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from scipy.spatial.transform import Rotation as R
 import numpy as np
+from std_msgs.msg import Bool
 
 class PBVSNode(Node):
     def __init__(self):
@@ -15,6 +16,13 @@ class PBVSNode(Node):
         self.init_dlt=True
         self.lmbda = 1      
         self.dist_target = 0.15
+
+        # Nouveaux topics pour le superviseur
+        self.enable_sub = self.create_subscription(Bool, '/ctrl/pbvs/enable', self.enable_cb, 10)
+        self.done_pub = self.create_publisher(Bool, '/ctrl/pbvs/done', 10)
+
+        self.is_enabled = False # Par défaut inactif
+        self.threshold_reached = False
         
         # self.target_frame='aruco_0'
         self.target_frame = 'puck_link'
@@ -48,6 +56,16 @@ class PBVSNode(Node):
         
         self.get_logger().info("node launched")
 
+
+
+# Callback d'activation
+    def enable_cb(self, msg):
+        self.is_enabled = msg.data
+        # Reset si on est désactivé
+        if not self.is_enabled:
+            self.threshold_reached = False
+
+
     def transform_to_matrix(self, t_stamped):
         t = t_stamped.transform.translation
         r = t_stamped.transform.rotation
@@ -62,7 +80,13 @@ class PBVSNode(Node):
             return v * (max_val / norm) 
         return v
 
-    def control_loop(self):       
+    def control_loop(self):    
+
+        if not self.is_enabled:
+            stop = Twist()
+            self.vel_pub.publish(stop)
+            return
+       
         try:
             t_cam_marker = self.tf_buffer.lookup_transform(
                 self.camera_frame,      
@@ -111,9 +135,20 @@ class PBVSNode(Node):
         self.error_pub.publish(err_msg)
         print(np.linalg.norm(e_p))
 
+        msg_done = Bool()
+
         if np.linalg.norm(e_p) < 0.005:
+            self.threshold_reached = True
+            msg_done.data = True
             self.vel_pub.publish(Twist())
             return
+        else :
+            msg_done.data = False
+        
+        self.done_pub.publish(msg_done)
+
+        if self.threshold_reached:
+            return # On arrête de calculer la commande si fini
 
         # Loi de commande PBVS dans repère caméra
         # Note: on utilise les variables e_p et e_o calculées juste au-dessus

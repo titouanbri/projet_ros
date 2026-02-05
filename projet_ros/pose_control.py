@@ -39,6 +39,9 @@ class CamPoseController(Node):
     def __init__(self):
         super().__init__('cam_pose_controller')
 
+
+        self.done_pub = self.create_publisher(Bool, '/ctrl/pose/done', 10)
+
         self.cmd_pub = self.create_publisher(Twist, '/ee_velocity_cmd', 1)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -105,11 +108,25 @@ class CamPoseController(Node):
 
                 self.error = np.linalg.norm(xi_err)
 
+                # Publication du feedback
+                done_msg = Bool()
+                
+                # Si l'erreur est faible ET que le node est activé (self.state)
+                if self.error < 5e-3 and self.state:
+                    done_msg.data = True
+                    # Optionnel : Arrêt
+                    self.cmd_pub.publish(Twist())
+                else:
+                    done_msg.data = False
+                    
+                self.done_pub.publish(done_msg)
+
                 if self.error > 1e-3:
                     self.compute_twist(xi_err)
 
         except (tf2_ros.LookupException, tf2_ros.ExtrapolationException, tf2_ros.ConnectivityException) as e:
             self.get_logger().warn(f"Problem getting TFs: {e}", throttle_duration_sec=5.0)
+
 
     def compute_twist(self, xi_err : np.ndarray):
         Kp = 1

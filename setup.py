@@ -42,6 +42,7 @@ setup(
             'PnP_node = projet_ros.PnP_node:main',
             'ibvs_node = projet_ros.ibvs:main',
             'cam_pose_controller = projet_ros.pose_control:main',
+            'supervisor_node = projet_ros.supervisor_node:main',
             
 
         ],
