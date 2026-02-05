@@ -14,21 +14,20 @@ class IBVSNode(Node):
         super().__init__('ibvs_node')
 
         # --- CONFIGURATION ---
-        self.lmbda = 1
+        self.lmbda = 1.0
+        self.k_orient = 2.0  # ### AJOUT ### Gain pour la correction verticale
         self.target_depth = 0.20
         self.puck_size = 0.05
         
-        # VERIFIEZ CES NOMS DE FRAMES
         self.camera_frame = 'camera_color_optical_frame'
         self.tool_frame = 'tool0'
+        self.base_frame = 'base_link' # ### AJOUT ### Nom de la base fixe du robot
         
-        # VERIFIEZ CE NOM DE TOPIC (Le double /camera/camera était dans votre v1)
         self.camera_info_topic = '/camera/camera/color/camera_info' 
-        # Si ça ne marche pas, essayez : '/camera/color/camera_info'
 
         self.MAX_LIN_VEL = 0.05
-        self.MAX_ANG_VEL = 0.1
-        self.detection_timeout = 1.0 # J'ai augmenté à 1s pour être plus tolérant
+        self.MAX_ANG_VEL = 0.2 # Augmenté un peu pour permettre la correction d'angle
+        self.detection_timeout = 1.0 
 
         # Variables internes
         self.K = None
@@ -46,11 +45,9 @@ class IBVSNode(Node):
         self.create_subscription(Polygon, '/detected_corners', self.corners_cb, 1)
         self.vel_pub = self.create_publisher(Twist, '/ee_velocity_cmd', 10)
 
-        # Timer
         self.create_timer(0.1, self.control_loop)
         
-        self.get_logger().info("--- DEBUG MODE ACTIF ---")
-        self.get_logger().info(f"Ecoute CameraInfo sur : {self.camera_info_topic}")
+        self.get_logger().info("--- MODE IBVS + VERTICALITE ACTIF ---")
 
     def camera_info_cb(self, msg):
         if self.K is None:
@@ -60,6 +57,7 @@ class IBVSNode(Node):
             self.cx = self.K[0, 2]
             self.cy = self.K[1, 2]
             
+            # Forme carrée désirée
             w_norm = (self.puck_size / 2.0) / self.target_depth
             h_norm = (self.puck_size / 2.0) / self.target_depth
             
@@ -76,12 +74,10 @@ class IBVSNode(Node):
             self.data_valid = True
         else:
             self.data_valid = False
-            self.get_logger().warn(f"Reçu {len(msg.points)} points au lieu de 4.")
 
     def control_loop(self):
         # 1. Check Camera Info
         if self.K is None:
-            self.get_logger().info("BLOQUÉ : En attente de CameraInfo...", throttle_duration_sec=2)
             return
 
         # 2. Check Watchdog
@@ -90,16 +86,14 @@ class IBVSNode(Node):
         
         if time_diff > self.detection_timeout:
             self.stop_robot()
-            self.get_logger().info(f"BLOQUÉ : Timeout détection ({time_diff:.2f}s > {self.detection_timeout}s)", throttle_duration_sec=2)
             return
 
         # 3. Check Valid Data
         if not self.data_valid:
             self.stop_robot()
-            self.get_logger().info("BLOQUÉ : Données invalides (pas 4 coins)", throttle_duration_sec=2)
             return
 
-        # 4. Calculs IBVS
+        # 4. Calculs
         try:
             self.compute_and_send_velocity()
         except Exception as e:
@@ -107,16 +101,16 @@ class IBVSNode(Node):
             self.stop_robot()
 
     def compute_and_send_velocity(self):
-        # ... (Logique identique à avant) ...
         Z = self.target_depth 
         s_current = []
         L_list = []
 
+        # --- PARTIE 1 : IBVS (Translation X, Y, Z + Rotation Z) ---
         for pt in self.current_points:
             x = (pt.x - self.cx) / self.fx
             y = (pt.y - self.cy) / self.fy
             s_current.extend([x, y])
-            # Matrice d'interaction 2x6
+            
             L_pt = np.array([
                 [-1/Z, 0, x/Z, x*y, -(1+x**2), y],
                 [ 0, -1/Z, y/Z, 1+y**2, -x*y, -x]
@@ -127,47 +121,85 @@ class IBVSNode(Node):
         L = np.vstack(L_list)
         error = s_current - self.s_star
 
-
-        # --- 4 DOF Constraint ---
+        # On garde seulement les colonnes pour Vx, Vy, Vz, Wz
         L_reduced = L[:, [0, 1, 2, 5]]
         
-        # Deadband check
+        # Deadband
         if np.linalg.norm(error) < 0.03:
+            # Note: On continue quand même le calcul si on veut corriger l'angle même centré
+            # Mais pour l'instant on s'arrête si la cible visuelle est parfaite
             self.stop_robot()
-            self.get_logger().info("CIBLE ATTEINTE (Zone morte)", throttle_duration_sec=2)
             return
 
         L_pinv = np.linalg.pinv(L_reduced)
         v_reduced = -self.lmbda * np.dot(L_pinv, error)
 
-        # Reconstruction 6D
+        # Construction vecteur vitesse CAMÉRA (6 DOF)
         v_cam = np.zeros(6)
-        v_cam[0] = v_reduced[0]
-        v_cam[1] = v_reduced[1]
-        v_cam[2] = v_reduced[2]
-        v_cam[5] = v_reduced[3] # Rotation Z
+        v_cam[0] = v_reduced[0] # Vx
+        v_cam[1] = v_reduced[1] # Vy
+        v_cam[2] = v_reduced[2] # Vz
+        # v_cam[3] (Wx) et v_cam[4] (Wy) sont laissés vides pour l'instant
+        v_cam[5] = v_reduced[3] # Wz (Rotation autour de l'axe optique)
 
-        # --- TF Check ---
+        # --- PARTIE 2 : CORRECTION VERTICALE (Wx, Wy) ---
+        try:
+            # On cherche la TF Base -> Camera
+            t_base_cam = self.tf_buffer.lookup_transform(
+                self.base_frame, self.camera_frame, rclpy.time.Time())
+            
+            q = t_base_cam.transform.rotation
+            R_bc = R.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
+
+            # Axe Z de la caméra exprimé dans la base
+            # (La colonne 2 de la matrice de rotation correspond à l'axe Z local)
+            z_cam_in_base = R_bc[:, 2] 
+
+            # Cible : On veut que Z caméra pointe vers le BAS du monde (0, 0, -1)
+            # (Ou vers l'AVANT selon votre montage, mais standard drone/bras = bas)
+            target_z = np.array([0, 0, -1])
+
+            # Produit vectoriel pour trouver l'axe de rotation nécessaire pour aligner les vecteurs
+            # axe_erreur est perpendiculaire aux deux vecteurs
+            rotation_axis_in_base = np.cross(z_cam_in_base, target_z)
+
+            # On transforme cette erreur (exprimée dans la base) vers le repère caméra
+            # w_cam = R_base_cam_transpose * w_base
+            rotation_error_in_cam = R_bc.T @ rotation_axis_in_base
+
+            # Contrôleur proportionnel pour redresser
+            # On injecte ça dans Wx et Wy de v_cam
+            v_cam[3] = self.k_orient * rotation_error_in_cam[0]
+            v_cam[4] = self.k_orient * rotation_error_in_cam[1]
+            
+            # Note : on touche pas à v_cam[5] qui est géré par l'IBVS
+
+        except TransformException as ex:
+            self.get_logger().warn(f"Pas de TF Base->Cam pour verticalité: {ex}", throttle_duration_sec=2)
+            # On continue sans correction verticale si TF échoue
+
+        # --- PARTIE 3 : TRANSFORMATION CAMÉRA -> OUTIL ---
         try:
             t_tool_cam = self.tf_buffer.lookup_transform(
                 self.tool_frame, self.camera_frame, rclpy.time.Time())
         except TransformException as ex:
             self.stop_robot()
-            self.get_logger().warn(f"BLOQUÉ : TF introuvable {ex}", throttle_duration_sec=2)
             return
 
-        # Transformation finale
-        q = t_tool_cam.transform.rotation
-        t = t_tool_cam.transform.translation
-        R_tc = R.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
-        P_tc = np.array([t.x, t.y, t.z])
+        q_tc = t_tool_cam.transform.rotation
+        t_tc = t_tool_cam.transform.translation
+        R_tc = R.from_quat([q_tc.x, q_tc.y, q_tc.z, q_tc.w]).as_matrix()
+        P_tc = np.array([t_tc.x, t_tc.y, t_tc.z])
 
+        # Twist transformation: V_tool = [R  S(P)R] * V_cam
+        #                       [0    R   ]
         v_c = v_cam[:3]
-        w_c = v_cam[3:]
+        w_c = v_cam[3:] # Contient maintenant Wx, Wy (verticalité) et Wz (IBVS)
         
         v_tool = (R_tc @ v_c) + np.cross(P_tc, (R_tc @ w_c))
         w_tool = R_tc @ w_c
 
+        # Envoi Commande
         cmd = Twist()
         cmd.linear.x = self.limit_val(v_tool[0], self.MAX_LIN_VEL)
         cmd.linear.y = self.limit_val(v_tool[1], self.MAX_LIN_VEL)
@@ -176,9 +208,7 @@ class IBVSNode(Node):
         cmd.angular.y = self.limit_val(w_tool[1], self.MAX_ANG_VEL)
         cmd.angular.z = self.limit_val(w_tool[2], self.MAX_ANG_VEL)
         
-        # LOG SUCCES (Throttle pour ne pas spammer)
         self.vel_pub.publish(cmd)
-        self.get_logger().info(f"MOVING: Vx={cmd.linear.x:.3f}, Vy={cmd.linear.y:.3f}", throttle_duration_sec=1)
 
     def limit_val(self, val, limit):
         return max(min(val, limit), -limit)
