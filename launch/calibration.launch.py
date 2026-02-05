@@ -20,7 +20,14 @@ def generate_launch_description():
         name='calib_cam_tf_broadcaster'
     )
 
+    pose_control = Node(
+        package='projet_ros',
+        executable='pose_control',
+        name='pose_control'
+    )
+
     return LaunchDescription([
         calibration_routine,
         calibrated_cam_broadcaster,
+        pose_control
     ])

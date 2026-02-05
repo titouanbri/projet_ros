@@ -70,9 +70,11 @@ class Scheduler(Node):
 
         if homed and not eye_in_hand_calibrated:
             self.send_cmd("eye_in_hand", True)
+            self.send_cmd("servoing", True)
             self.get_logger().warn(f"Doing eye-in-hand calibration....",throttle_duration_sec=10)
         elif homed:
             self.send_cmd("eye_in_hand", False)
+            self.send_cmd("servoing", False)
             self.get_logger().warn(f"Eye-in-hand calibration finished!",throttle_duration_sec=10)
      
 

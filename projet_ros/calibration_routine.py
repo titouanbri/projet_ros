@@ -69,6 +69,12 @@ class EETargetsNode(Node):
 
         self.bridge = CvBridge()
 
+        self.state = False
+        #------Scheduling-------
+        self.feedback_pub = self.create_publisher(Bool, '/eye_in_hand_feedback',1)
+        self.create_subscription(Bool,'/eye_in_hand_cmd',self.cmd_cb,2)
+        #-----------------------
+
         self.marker_detected = False
         self.targets_generated = False
         self.corners = None
@@ -114,6 +120,13 @@ class EETargetsNode(Node):
 
         self.create_timer(0.05, self.step)
 
+    
+    def cmd_cb(self,msg : Bool):
+        self.state = msg.data
+        if self.state:
+            self.get_logger().warn(f"Received start command for eye-in-hand calibration", throttle_duration_sec=5.0)
+    
+    
     def camera_info_cb(self, msg: CameraInfo):
         self.camera_matrix = np.array(msg.k, dtype=np.float64).reshape(3, 3)
         self.dist_coeffs = np.array(msg.d, dtype=np.float64)
@@ -140,6 +153,8 @@ class EETargetsNode(Node):
                 )
 
     def step(self):
+        if not self.state:
+            return
         # generate targets once
         if self.marker_detected and not self.targets_generated:
 
