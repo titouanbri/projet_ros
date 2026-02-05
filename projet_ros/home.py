@@ -40,7 +40,13 @@ class CamPoseController(Node):
         super().__init__('cam_pose_controller')
 
         self.cmd_pub = self.create_publisher(Twist, '/ee_velocity_cmd', 1)
-        self.state_pub = self.create_publisher(Bool, '/homed',1)
+        self.state = False
+
+        #------Scheduling-------
+        self.feedback_pub = self.create_publisher(Bool, '/homing_feedback',1)
+        self.create_subscription(Bool,'/homing_cmd',self.cmd_cb,2)
+        #-----------------------
+
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         
@@ -62,24 +68,31 @@ class CamPoseController(Node):
         self.dt = 0.01  # control loop period
         self.timer = self.create_timer(self.dt, self.timer_cb)
 
+    def cmd_cb(self,msg : Bool):
+        self.state = msg.data
+        if self.state:
+            self.get_logger().warn(f"Received start command for homing task", throttle_duration_sec=5.0)
+
     def timer_cb(self):
-        try:
-            base_frame = "base_link"
-            ee_frame = "wrist_3_link"
+        if self.state:
+            try:
+                base_frame = "base_link"
+                ee_frame = "wrist_3_link"
 
-            if self.tf_buffer.can_transform(base_frame, ee_frame, rclpy.time.Time()):
+                if self.tf_buffer.can_transform(base_frame, ee_frame, rclpy.time.Time()):
 
-                ee_tf = self.tf_buffer.lookup_transform(
-                    base_frame, ee_frame, rclpy.time.Time(),
-                    timeout=rclpy.duration.Duration(seconds=self.dt)
-                )
+                    ee_tf = self.tf_buffer.lookup_transform(
+                        base_frame, ee_frame, rclpy.time.Time(),
+                        timeout=rclpy.duration.Duration(seconds=self.dt)
+                    )
 
-                self.compute_twist(ee_tf, self.target_tf)
+                    self.compute_twist(ee_tf, self.target_tf)
 
-        except (tf2_ros.LookupException, tf2_ros.ExtrapolationException, tf2_ros.ConnectivityException) as e:
-            self.get_logger().warn(f"Problem getting TFs: {e}", throttle_duration_sec=5.0)
+            except (tf2_ros.LookupException, tf2_ros.ExtrapolationException, tf2_ros.ConnectivityException) as e:
+                self.get_logger().warn(f"Problem getting TFs: {e}", throttle_duration_sec=5.0)
 
     def compute_twist(self, ee_tf: TransformStamped, target_tf: TransformStamped):
+
         Kp = 1
 
         # --- Current end-effector pose ---
@@ -132,19 +145,24 @@ class CamPoseController(Node):
         twist_out.linear.x = float(v[0])
         twist_out.linear.y = float(v[1])
         twist_out.linear.z = float(v[2])
-
+        
         self.cmd_pub.publish(twist_out)
+
+        if np.linalg.norm(v) <1e-3 and np.linalg.norm(w) <2e-2:
+            self.feedback_pub.publish(Bool(data=True))
+        else:
+            self.feedback_pub.publish(Bool(data=False))
 
 def main(args=None):
     rclpy.init(args=args)
     node = CamPoseController()
     
-    while node.error > 1e-3:
-        rclpy.spin_once(node)
+    #while node.error > 1e-3:
+    #    rclpy.spin_once(node) 
+    #node.feedback_pub.publish(Bool(data=True))
+    #rclpy.spin_once(node)
 
-    
-    node.state_pub.publish(Bool(data=True))
-    rclpy.spin_once(node)
+    rclpy.spin(node)
     node.get_logger().warn("HOMING COMPLETE")
     node.destroy_node()
     rclpy.shutdown()
