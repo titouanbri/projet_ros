@@ -11,22 +11,21 @@ class SupervisorNode(Node):
     def __init__(self):
         super().__init__('supervisor_node')
 
-        # --- Paramètres ---
+        # Paramètres 
         self.target_frame = 'puck_link'  # L'objet suivi par le PBVS
         self.base_frame = 'base_link'
         self.desired_frame_name = 'desired_ee'
-        self.actual_ee_frame = 'wrist_3_link' # La vraie frame du robot à contrôler (à adapter selon votre robot)
+        self.actual_ee_frame = 'wrist_3_link' # La vraie frame du robot à contrôler
 
-        # --- Machine à états ---
         # States: 'PBVS', 'TRANSITION', 'POSE_CONTROL', 'FINISHED'
         self.state = 'PBVS'
         self.desired_transform = None
 
-        # --- Publishers (Commandes) ---
+        # Publishers
         self.pub_cmd_pbvs = self.create_publisher(Bool, '/ctrl/pbvs/enable', 10)
         self.pub_cmd_pose = self.create_publisher(Bool, '/auto_pose_control_enabled', 10)
 
-        # --- Subscribers (Feedback) ---
+        # Subscribers 
         self.sub_feedback_pbvs = self.create_subscription(Bool, '/ctrl/pbvs/done', self.pbvs_done_cb, 10)
         self.sub_feedback_pose = self.create_subscription(Bool, '/ctrl/pose/done', self.pose_done_cb, 10)
         
@@ -34,7 +33,7 @@ class SupervisorNode(Node):
         self.pbvs_finished = False
         self.pose_finished = False
 
-        # --- TF Tools ---
+        # TF Tools 
         self.tf_broadcaster = TransformBroadcaster(self)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -66,7 +65,7 @@ class SupervisorNode(Node):
 
         elif self.state == 'TRANSITION':
             # On fige la 'desired_ee' basée sur la position actuelle du puck
-            # mais avec une orientation imposée (ex: pince vers le bas)
+            # orientation imposée
             success = self.define_desired_pose()
             if success:
                 self.state = 'POSE_CONTROL'
@@ -77,7 +76,7 @@ class SupervisorNode(Node):
             cmd_pbvs.data = False
             cmd_pose.data = True
             
-            # On doit continuer à publier la TF desired_ee
+            # On doit continuer à publier la TF desired_ee (peut etre pas ?)
             if self.desired_transform:
                 self.desired_transform.header.stamp = self.get_clock().now().to_msg()
                 self.tf_broadcaster.sendTransform(self.desired_transform)
@@ -89,7 +88,7 @@ class SupervisorNode(Node):
         elif self.state == 'FINISHED':
             cmd_pbvs.data = False
             cmd_pose.data = False
-            # Optionnel : continuer à publier desired_ee pour maintenir la position
+            # continuer à publier desired_ee pour maintenir la position (peut etre pas ?)
             if self.desired_transform:
                 self.desired_transform.header.stamp = self.get_clock().now().to_msg()
                 self.tf_broadcaster.sendTransform(self.desired_transform)
@@ -101,7 +100,7 @@ class SupervisorNode(Node):
 
     def define_desired_pose(self):
         try:
-            # On cherche où est le puck par rapport à la base
+            # puck par rapport à la base
             t = self.tf_buffer.lookup_transform(
                 self.base_frame,
                 self.target_frame,
@@ -109,7 +108,7 @@ class SupervisorNode(Node):
             )
 
 
-            # On récupère l'ORIENTATION actuelle du robot (pour la figer)
+            # orientation actuelle du robot (pour la figer)
             t_current_ee = self.tf_buffer.lookup_transform(
                 self.base_frame,
                 self.actual_ee_frame, # La frame réelle du robot
