@@ -35,6 +35,7 @@ class Scheduler(Node):
 
         self.sequence = [   #FOR GRAFCET LIKE BEHAVIOR
             "homing",
+            "cam_calib",
             "eye_in_hand",
             "detection",
             "servoing",
@@ -76,6 +77,8 @@ class Scheduler(Node):
             self.send_cmd("eye_in_hand", False)
             self.send_cmd("servoing", False)
             self.get_logger().warn(f"Eye-in-hand calibration finished!",throttle_duration_sec=10)
+
+        
      
 
 

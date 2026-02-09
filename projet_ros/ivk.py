@@ -22,7 +22,7 @@ class UR3eIVK(Node):
         self.cmd_in = Twist()
         self.current_dq = np.zeros(6)  # UR3e has 6 movable joints
         self.filtered_dq = np.zeros(6)  # for low-pass filter
-        self.alpha = 0.1  # LPF coefficient (0 < alpha <= 1)
+        self.alpha = 0.05  # LPF coefficient (0 < alpha <= 1)
 
         # Link list (base → joints → EE)
         self.lookup_list = [
