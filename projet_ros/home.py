@@ -150,6 +150,7 @@ class CamPoseController(Node):
 
         if np.linalg.norm(v) <1e-3 and np.linalg.norm(w) <2e-2:
             self.feedback_pub.publish(Bool(data=True))
+            self.get_logger().warn(f"Reached Home Pose", throttle_duration_sec=5.0)
         else:
             self.feedback_pub.publish(Bool(data=False))
 

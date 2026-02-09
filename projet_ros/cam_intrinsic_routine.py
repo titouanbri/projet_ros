@@ -10,6 +10,7 @@ from cv_bridge import CvBridge
 import cv2
 import numpy as np
 from tf2_ros import Buffer, TransformListener, TransformBroadcaster
+from scipy.linalg import logm
 
 def quaternion_from_rpy(roll, pitch, yaw):
     """Return quaternion [x,y,z,w] from RPY (radians)."""
@@ -84,6 +85,26 @@ def tilt_quaternion(base_quat, roll_offset=0, pitch_offset=0, yaw_offset=0):
         qz = 0.25*S
     return np.array([qx,qy,qz,qw], dtype=np.float64)
 
+def quaternion_to_rotation_matrix(qx,qy,qz,qw):
+    """Convert quaternion to 3x3 rotation matrix."""
+    n = np.sqrt(qx*qx + qy*qy + qz*qz + qw*qw)
+    qx,qy,qz,qw = qx/n, qy/n, qz/n, qw/n
+    r00 = 1 - 2*(qy*qy + qz*qz)
+    r01 = 2*(qx*qy - qz*qw)
+    r02 = 2*(qx*qz + qy*qw)
+    r10 = 2*(qx*qy + qz*qw)
+    r11 = 1 - 2*(qx*qx + qz*qz)
+    r12 = 2*(qy*qz - qx*qw)
+    r20 = 2*(qx*qz - qy*qw)
+    r21 = 2*(qy*qz + qx*qw)
+    r22 = 1 - 2*(qx*qx + qy*qy)
+    return np.array([[r00,r01,r02],[r10,r11,r12],[r20,r21,r22]])
+
+def hat_to_twist(xi_hat: np.ndarray):
+    """Convert se(3) matrix to 6x1 twist vector (angular | linear)."""
+    w = np.array([xi_hat[2,1], xi_hat[0,2], xi_hat[1,0]])
+    v = xi_hat[:3,3]
+    return np.hstack((w, v))
 
 class CameraCalibTargets(Node):
     def __init__(self):
@@ -148,8 +169,8 @@ class CameraCalibTargets(Node):
         ])
 
         offsets = [
-            [0, 0, 0],
             [0.05, 0, 0],
+            [0, 0, 0],
             [-0.05, 0, 0],
             [0, 0.05, 0],
             [0, -0.10, 0],
@@ -167,15 +188,20 @@ class CameraCalibTargets(Node):
             tf.transform.translation.y = ee_pos[1] + off[1]
             tf.transform.translation.z = ee_pos[2] + off[2]
 
-            roll_inc = np.deg2rad(1*i)
-            pitch_inc = np.deg2rad(1*i)
+            roll_inc = np.deg2rad(2*(-1)**(i//3))
+            pitch_inc = np.deg2rad(2*(-1)**(i//3))
+            yaw_inc = np.deg2rad(5*(-1)**(i+1))
             base_quat = np.array([
                 ee_tf.transform.rotation.x,
                 ee_tf.transform.rotation.y,
                 ee_tf.transform.rotation.z,
                 ee_tf.transform.rotation.w
             ])
-            tf.transform.rotation.x, tf.transform.rotation.y, tf.transform.rotation.z, tf.transform.rotation.w = tilt_quaternion(base_quat, roll_inc, pitch_inc)
+
+
+            new_quat = tilt_quaternion(base_quat, roll_inc, pitch_inc,yaw_inc)
+            self.qn = new_quat
+            tf.transform.rotation.x, tf.transform.rotation.y, tf.transform.rotation.z, tf.transform.rotation.w = new_quat
             self.targets.append(tf)
 
     def step(self):
@@ -201,23 +227,47 @@ class CameraCalibTargets(Node):
             self.get_logger().info("Camera calibration finished")
             return
 
-        target = self.targets[self.current_target]
+        target : TransformStamped= self.targets[self.current_target]
         target.header.stamp = self.get_clock().now().to_msg()
         target.child_frame_id = 'desired_ee'
         self.tf_broadcaster.sendTransform(target)
 
-        ee_pos = np.array([
-            ee_tf.transform.translation.x,
-            ee_tf.transform.translation.y,
-            ee_tf.transform.translation.z
-        ])
-        tgt_pos = np.array([
-            target.transform.translation.x,
-            target.transform.translation.y,
-            target.transform.translation.z
-        ])
 
-        if np.linalg.norm(ee_pos - tgt_pos) < self.reach_thresh:
+
+        t_ee = ee_tf.transform.translation
+        R_ee = quaternion_to_rotation_matrix(
+            ee_tf.transform.rotation.x,
+            ee_tf.transform.rotation.y,
+            ee_tf.transform.rotation.z,
+            ee_tf.transform.rotation.w
+        )
+        x_ee = np.array([t_ee.x, t_ee.y, t_ee.z])
+        H_ee = np.block([[R_ee, x_ee.reshape(3,1)],
+                         [np.zeros((1,3)), 1]])
+
+        # --- Desired pose from TF ---
+        t_d = target.transform.translation
+        R_d = quaternion_to_rotation_matrix(
+            target.transform.rotation.x,
+            target.transform.rotation.y,
+            target.transform.rotation.z,
+            target.transform.rotation.w
+        )
+        x_d = np.array([t_d.x, t_d.y, t_d.z])
+
+        #x_d = np.array([0.3,0.3,0.3])
+        #R_d = RPY_to_R(-np.pi/2,0,0)
+
+        H_d = np.block([[R_d, x_d.reshape(3,1)],
+                        [np.zeros((1,3)), 1]])
+
+        # --- Compute error in se(3) ---
+        err_hat = logm(np.linalg.inv(H_ee) @ H_d)
+        xi_err = hat_to_twist(err_hat)
+
+        error = np.linalg.norm(xi_err)
+
+        if error < self.reach_thresh:
             self.capture_pub.publish(Bool(data=True))
             self.get_logger().info(f"Capture at target {self.current_target + 1}")
             self.current_target += 1
