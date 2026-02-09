@@ -41,8 +41,11 @@ setup(
             'test_pbvs = projet_ros.test_pbvs:main',
             'PnP_node = projet_ros.PnP_node:main',
             'ibvs_node = projet_ros.ibvs:main',
-            'cam_pose_controller = projet_ros.pose_control:main',
+            'pose_control = projet_ros.pose_control:main',
             'supervisor_node = projet_ros.supervisor_node:main',
+            'calibration_routine = projet_ros.calibration_routine:main',
+            'calib_cam_tf_broadcaster = projet_ros.calib_cam_tf_broadcaster:main',
+
             
 
         ],

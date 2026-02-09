@@ -112,7 +112,7 @@ class CamPoseController(Node):
                 done_msg = Bool()
                 
                 # Si l'erreur est faible ET que le node est activé (self.state)
-                if self.error < 5e-3 and self.state:
+                if self.error < 5e-3 : #and self.state:
                     done_msg.data = True
                     # Optionnel : Arrêt
                     self.cmd_pub.publish(Twist())
@@ -145,7 +145,7 @@ class CamPoseController(Node):
         twist_out.linear.y = float(v[1])
         twist_out.linear.z = float(v[2])
 
-        if self.state:
+        if True : #self.state:
             self.cmd_pub.publish(twist_out)
 
 def main(args=None):

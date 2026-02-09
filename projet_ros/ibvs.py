@@ -183,10 +183,8 @@ class IBVSNode(Node):
         R_tc = R.from_quat([q_tc.x, q_tc.y, q_tc.z, q_tc.w]).as_matrix()
         P_tc = np.array([t_tc.x, t_tc.y, t_tc.z])
 
-        # Twist transformation: V_tool = [R  S(P)R] * V_cam
-        #                       [0    R   ]
         v_c = v_cam[:3]
-        w_c = v_cam[3:] # Contient maintenant Wx, Wy (verticalité) et Wz (IBVS)
+        w_c = v_cam[3:] 
         
         v_tool = (R_tc @ v_c) + np.cross(P_tc, (R_tc @ w_c))
         w_tool = R_tc @ w_c

@@ -116,13 +116,11 @@ class PBVSNode(Node):
         r_obj = R.from_matrix(R_mat)    
         rot_vec = r_obj.as_rotvec()   
 
-        # --- EXTRACTION DE L'ERREUR POUR PLOT ---
-        # L'erreur linéaire doit être projetée dans le repère courant pour correspondre à la loi de commande
-        # C'est ce vecteur exact que le gain lambda multiplie
-        e_p = R_mat.T @ t_vec   # Erreur position (x, y, z)
-        e_o = rot_vec           # Erreur orientation (rx, ry, rz)
+        #EXTRACTION ERREUR POUR PLOT
+        e_p = R_mat.T @ t_vec   # position
+        e_o = rot_vec           # orientation 
 
-        # --- AJOUT: Publication de l'erreur ---
+        # Publication de l'erreur
         err_msg = Twist()
         # Erreur linéaire (mètres)
         err_msg.linear.x = float(e_p[0])
@@ -151,7 +149,6 @@ class PBVSNode(Node):
             return # On arrête de calculer la commande si fini
 
         # Loi de commande PBVS dans repère caméra
-        # Note: on utilise les variables e_p et e_o calculées juste au-dessus
         v_cam = -self.lmbda * e_p
         w_cam = -self.lmbda * e_o
         # w_cam=np.array([0.0,0.0,0.0]) 
@@ -191,7 +188,6 @@ class PBVSNode(Node):
 
         self.vel_pub.publish(cmd)
 
-# ... (reste du main identique)
 def main(args=None):
     rclpy.init(args=args)
     node = PBVSNode()
