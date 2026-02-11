@@ -14,6 +14,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'models'), glob('models/*.pt')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -32,7 +33,8 @@ setup(
             'home = projet_ros.home:main',
             'control_panel = projet_ros.cart_vel_panel:main',
             'calibration_routine = projet_ros.calibration_routine:main',
-            'calib_cam_tf_broadcaster = projet_ros.calib_cam_tf_broadcaster:main'
+            'calib_cam_tf_broadcaster = projet_ros.calib_cam_tf_broadcaster:main',
+            'pose_control = projet_ros.pose_control:main',
 
         ],
     },

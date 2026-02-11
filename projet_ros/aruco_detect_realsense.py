@@ -124,7 +124,7 @@ class ArucoTrackingNode(Node):
 
         try:
             cam_tf = self.tf_buffer.lookup_transform(
-                'base_link', 'camera_link', # adjust to your camera frame
+                'base_link', 'camera_optical_frame', # adjust to your camera frame
                 rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=0.01)
             )
@@ -161,7 +161,7 @@ class ArucoTrackingNode(Node):
 
                 pose = PoseStamped()
                 pose.header.stamp = msg.header.stamp
-                pose.header.frame_id = 'camera_link'
+                pose.header.frame_id = 'camera_color_optical_frame'
                 pose.pose.position.x = float(tvec[0])
                 pose.pose.position.y = float(tvec[1])
                 pose.pose.position.z = float(tvec[2])
@@ -179,7 +179,7 @@ class ArucoTrackingNode(Node):
 
                 tf_msg = TransformStamped()
                 tf_msg.header.stamp = msg.header.stamp
-                tf_msg.header.frame_id = 'base_link'
+                tf_msg.header.frame_id = 'camera_color_optical_frame'
                 tf_msg.child_frame_id = 'aruco'
                 tf_msg.transform.translation.x = float(t_aruco_base[0])
                 tf_msg.transform.translation.y = float(t_aruco_base[1])

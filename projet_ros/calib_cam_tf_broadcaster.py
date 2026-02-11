@@ -132,6 +132,7 @@ class HandEyeCalib(Node):
         self.samples_needed = 15
         self.calibrated = False
         self.T_base_cam = None
+        self.X = None
 
     def ee_cb(self, msg: TFMessage):
         if not msg.transforms:
@@ -174,6 +175,7 @@ class HandEyeCalib(Node):
             B_list.append(B1)
 
         X = hand_eye_solve(A_list, B_list)
+        self.X = np.linalg.inv(X)
         # Use first EE pose to compute camera w.r.t base
         self.T_base_cam = self.ee_hist[0] @ X
         self.calibrated = True
@@ -185,9 +187,9 @@ class HandEyeCalib(Node):
     def broadcast_tf(self):
         if self.T_base_cam is None:
             return
-        t_msg = from_matrix(self.T_base_cam)
+        t_msg = from_matrix(self.X)
         t_msg.header.stamp = self.get_clock().now().to_msg()
-        t_msg.header.frame_id = 'base_link'
+        t_msg.header.frame_id = 'wrist_3_link' #'base_link'
         t_msg.child_frame_id = 'camera_link'
         self.tf_broadcaster.sendTransform(t_msg)
 

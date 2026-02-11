@@ -44,7 +44,7 @@ class CamPoseController(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         self.error = 0.0
-        self.state = False
+        self.state = True
         self.create_subscription(Bool, '/auto_pose_control_enabled', self.reached_cb, 1)
 
         #------Scheduling-------
